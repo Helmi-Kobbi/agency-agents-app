@@ -1,0 +1,33 @@
+# Tasks — 2026-06
+
+Agency Agents was forked from brew-browser and stood up this month.
+
+## Completed
+
+### 2026-06-05: Phase 0 — Fork & rebrand
+Forked the brew-browser scaffold into `agency-agents-app`, rebranded to "Agency Agents"
+(`com.zerologic.agency-agents-app`). Green `cargo check` + `vite build`.
+See [260605_phase0-fork-rebrand.md](./260605_phase0-fork-rebrand.md).
+
+### 2026-06-05: Phase 1 — Corpus + Discover
+Built the corpus subsystem (parse, sha256 split-hash index, GitHub-tarball refresh) and the Agents
+catalog view. Catalog = 210 agent personas / 16 categories. Verified live; fixed a concurrent-seed
+race. See [260605_phase1-corpus-discover.md](./260605_phase1-corpus-discover.md).
+
+### 2026-06-05: Phase 1.5 — Agency-first polish
+Real Lucide category icons, lean agency sidebar (🤖 brand, Agents/Activity nav, agent-count footer),
+default landing = Agents, window vibrancy. Verified live.
+
+### 2026-06-05: Phase 2 — Install + Reconcile
+Native deterministic per-tool renderers + ledger + 5-state reconcile + tools/projects + install UI.
+630 tests green; install verified end-to-end (write→disk→reconcile).
+See [260605_phase2-install-reconcile.md](./260605_phase2-install-reconcile.md).
+
+### 2026-06-05: Phase 2 follow-ups + Phase 3
+Library + Tools views, Foreign-sweep + Adopt (validated against a real install.sh run: 180 agents),
+update_kind. Then Phase 3: Loadouts (Agentfile export/import) + agency Dashboard rollup.
+See [260605_phase3-loadouts-dashboard.md](./260605_phase3-loadouts-dashboard.md).
+
+## Next
+- Phase 4 — Trending + GitHub.
+- Deferred: multi-file tool renderers (antigravity/openclaw/aider/windsurf).

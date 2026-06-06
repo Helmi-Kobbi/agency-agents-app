@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Agency Agents",
+  "version": "0.1.0",
+  "identifier": "com.zerologic.agency-agents-app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1430",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "title": "Agency Agents",
+        "width": 1100,
+        "height": 720,
+        "minWidth": 800,
+        "minHeight": 500,
+        "transparent": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 14, "y": 20 }
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' https://api.github.com https://github.com https://codeload.github.com https://objects.githubusercontent.com https://raw.githubusercontent.com https://agency-agents-app.zerologic.com; img-src 'self' data: https://raw.githubusercontent.com https://avatars.githubusercontent.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://agency-agents-app.zerologic.com/updater.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDczMzVERDBGRDAzQTRBNkEKUldScVNqclFEOTAxYy9DYTg5QThJR2JWWHJZSWdWMXRkckFlUDAyVHpxcjgwWXVHaUQ2VlNGcHgK"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": "all",
+    "resources": [
+      "resources/corpus-baseline/**/*"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "signingIdentity": "Developer ID Application: Michael Sitarzewski (7JQGQ7CRH8)",
+      "hardenedRuntime": true,
+      "minimumSystemVersion": "13.0"
+    }
+  }
+}

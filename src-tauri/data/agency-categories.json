@@ -1,0 +1,21 @@
+{
+  "_note": "Category label+icon metadata for the Agency Agents corpus (Discover grid). Decoupled from brew's data/categories.json. Icons are Lucide PascalCase names. Read by src/corpus/mod.rs::category_meta.",
+  "categories": {
+    "academic": { "label": "Academic", "icon": "GraduationCap" },
+    "design": { "label": "Design", "icon": "PenTool" },
+    "engineering": { "label": "Engineering", "icon": "Code" },
+    "finance": { "label": "Finance", "icon": "DollarSign" },
+    "game-development": { "label": "Game Development", "icon": "Gamepad2" },
+    "integrations": { "label": "Integrations", "icon": "Plug" },
+    "marketing": { "label": "Marketing", "icon": "Megaphone" },
+    "paid-media": { "label": "Paid Media", "icon": "Target" },
+    "product": { "label": "Product", "icon": "Box" },
+    "project-management": { "label": "Project Management", "icon": "ClipboardList" },
+    "sales": { "label": "Sales", "icon": "TrendingUp" },
+    "security": { "label": "Security", "icon": "ShieldCheck" },
+    "spatial-computing": { "label": "Spatial Computing", "icon": "Boxes" },
+    "specialized": { "label": "Specialized", "icon": "Sparkles" },
+    "support": { "label": "Support", "icon": "LifeBuoy" },
+    "testing": { "label": "Testing", "icon": "FlaskConical" }
+  }
+}
