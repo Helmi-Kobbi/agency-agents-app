@@ -325,6 +325,35 @@ fn classify(
     }
 }
 
+/// True if `file_bytes` are byte-identical to the canonical render of `agent`
+/// for `tool`. Pure (no I/O) so it's unit-testable. When they match, the file
+/// on disk IS this agent verbatim — there's nothing to "adopt"; reconcile can
+/// treat it as `Current` even if we didn't install it.
+fn bytes_match_render(agent: &crate::types::Agent, raw: &str, tool: Tool, file_bytes: &[u8]) -> bool {
+    match render::render_with_hash(agent, raw, tool) {
+        Ok((_, expected)) => render::sha256_hex(file_bytes) == expected,
+        Err(_) => false,
+    }
+}
+
+/// I/O wrapper for [`bytes_match_render`]: reads the agent's canonical source +
+/// the on-disk file and compares. Returns `false` on any read/render failure
+/// (can't prove identity ⇒ don't auto-claim it).
+async fn is_canonical_on_disk(
+    app: &AppHandle,
+    agent: &crate::types::Agent,
+    tool: Tool,
+    path: &Path,
+) -> bool {
+    let Ok(raw) = corpus::read_source(app, &agent.category, &agent.slug).await else {
+        return false;
+    };
+    let Ok(bytes) = read_capped(path, MAX_INSTALLED_BYTES).await else {
+        return false;
+    };
+    bytes_match_render(agent, &raw, tool, &bytes)
+}
+
 // ---------- Tool detection ----------
 
 fn detect(tool: Tool, home: &Path) -> (bool, Option<String>) {
@@ -510,8 +539,12 @@ pub async fn installs_reconcile(
     }
 
     // Foreign sweep: files on disk we did NOT install but recognize as corpus
-    // agents (slug matches a known agent), so the user can Track them. Scans
-    // each supported tool's dir(s) — user dirs + every project dir in the ledger.
+    // agents (slug matches a known agent). A file that is BYTE-IDENTICAL to the
+    // canonical render IS that agent, verbatim — installed outside the app (e.g.
+    // the CLI install.sh), but in sync. We surface it as `Current` (nothing to
+    // decide). Only a recognized-but-DIFFERENT file (older version, or
+    // hand-edited) stays `Foreign` and asks for a look. Scans each supported
+    // tool's dir(s) — user dirs + every project dir in the ledger.
     let ledger_keys: std::collections::HashSet<(String, Tool, Option<String>)> = ledger
         .iter()
         .map(|r| (r.slug.clone(), r.tool, r.project_path.clone()))
@@ -544,21 +577,27 @@ pub async fn installs_reconcile(
             while let Ok(Some(ent)) = rd.next_entry().await {
                 let path = ent.path();
                 let Some(slug) = path.file_stem().and_then(|s| s.to_str()) else { continue };
-                if corpus.get(slug).is_none() {
+                let Some(agent) = corpus.get(slug) else {
                     continue; // unrecognized → not ours to claim
-                }
+                };
                 if ledger_keys.contains(&(slug.to_string(), tool, proj.clone())) {
-                    continue; // already tracked
+                    continue; // already in the ledger
                 }
-                let name = corpus.get(slug).map(|a| a.name).unwrap_or_else(|| slug.to_string());
+                // Byte-identical to the catalog ⇒ in sync ⇒ Current. Otherwise a
+                // recognized-but-divergent file ⇒ Foreign (worth a look).
+                let state = if is_canonical_on_disk(&app, &agent, tool, &path).await {
+                    InstallState::Current
+                } else {
+                    InstallState::Foreign
+                };
                 out.push(InstalledAgent {
                     slug: slug.to_string(),
-                    name,
+                    name: agent.name.clone(),
                     tool,
                     scope: tool.scope(),
                     project_path: proj.clone(),
                     dest: path.to_string_lossy().to_string(),
-                    state: InstallState::Foreign,
+                    state,
                     update_kind: None,
                 });
             }
@@ -824,6 +863,22 @@ mod tests {
         assert!(proj.path().join(".cursor/rules/frontend-developer.mdc").exists());
         assert_eq!(rec.project_path.as_deref(), Some(proj.path().to_string_lossy().as_ref()));
         assert_eq!(rec.scope, crate::types::Scope::Project);
+    }
+
+    /// A file byte-identical to the canonical render is recognized as in-sync
+    /// (so the Foreign sweep can call it Current); any difference is not.
+    #[test]
+    fn canonical_render_is_recognized_byte_for_byte() {
+        let agent = sample_agent();
+        let raw = "---\nname: Frontend Developer\ncolor: blue\n---\nBODY\n";
+        // The exact canonical render matches…
+        let (rendered, _h) = render::render_with_hash(&agent, raw, Tool::Codex).unwrap();
+        assert!(bytes_match_render(&agent, raw, Tool::Codex, rendered.as_bytes()));
+        // …a hand-edited / different file does not.
+        assert!(!bytes_match_render(&agent, raw, Tool::Codex, b"different bytes"));
+        // Identity tool (claude-code ships the source verbatim) also matches.
+        let (raw_render, _h2) = render::render_with_hash(&agent, raw, Tool::ClaudeCode).unwrap();
+        assert!(bytes_match_render(&agent, raw, Tool::ClaudeCode, raw_render.as_bytes()));
     }
 
     /// Track records provenance but must NOT create or touch any file.

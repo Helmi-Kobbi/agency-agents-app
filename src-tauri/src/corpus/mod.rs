@@ -449,31 +449,62 @@ pub async fn resolve_active(app_data_dir: &Path, baseline_dir: &Path) -> Corpus 
     corpus
 }
 
-/// Build an in-memory [`Corpus`] by walking `<dir>/<category>/<slug>.md`
-/// for every known category. Files without valid frontmatter (READMEs,
-/// workflow docs) are skipped. The resulting `agents` vec and `index` map
-/// are ordered deterministically by `(category, slug)`.
+/// Recursively collect every `*.md` under `root`, sorted by full path for
+/// determinism. Real catalog clones nest agents in subdirectories (e.g.
+/// `game-development/godot/<slug>.md`, `game-development/unity/<slug>.md`), so a
+/// flat top-level scan would silently miss them.
+fn collect_md_files(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for ent in rd.flatten() {
+            let path = ent.path();
+            match ent.file_type() {
+                Ok(ft) if ft.is_dir() => stack.push(path),
+                Ok(_) if path.extension().and_then(|e| e.to_str()) == Some("md") => out.push(path),
+                _ => {}
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Find `<file_name>` anywhere under `dir` (depth-first). Used by `read_source`
+/// to resolve a nested agent's canonical file when the flat path doesn't exist.
+fn find_md_under(dir: &Path, file_name: &str) -> Option<PathBuf> {
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for ent in rd.flatten() {
+            let path = ent.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.file_name().and_then(|n| n.to_str()) == Some(file_name) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// Build an in-memory [`Corpus`] by walking `<dir>/<category>/**/<slug>.md`
+/// for every known category (recursively — real clones nest agents in
+/// subdirs). Files without valid frontmatter (READMEs, workflow docs) are
+/// skipped. The category is the top-level dir; the resulting `agents` vec and
+/// `index` map are ordered deterministically by `(category, path)`.
 async fn build_from_dir(dir: &Path, version: &str, categories: &[String]) -> Result<Corpus, AppError> {
     let mut rows: Vec<(Agent, CorpusEntry)> = Vec::new();
 
     for category in categories.iter() {
         let category = category.as_str();
         let cat_dir = dir.join(category);
-        let mut read = match tokio::fs::read_dir(&cat_dir).await {
-            Ok(r) => r,
-            Err(_) => continue, // category dir absent — fine, skip.
-        };
-
-        // Collect filenames first so we can sort for determinism (the OS
-        // read_dir order is unspecified).
-        let mut files: Vec<PathBuf> = Vec::new();
-        while let Ok(Some(ent)) = read.next_entry().await {
-            let path = ent.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                files.push(path);
-            }
+        if !cat_dir.is_dir() {
+            continue; // category dir absent — fine, skip.
         }
-        files.sort();
+        // Recursive, sorted-by-path collection (catches nested agents).
+        let files = collect_md_files(&cat_dir);
 
         for path in files {
             let Some(slug) = path.file_stem().and_then(|s| s.to_str()) else {
@@ -501,8 +532,8 @@ async fn build_from_dir(dir: &Path, version: &str, categories: &[String]) -> Res
         }
     }
 
-    // `rows` is already in `(category, slug)` order because we iterate
-    // `categories` in tooling order and sort filenames within each.
+    // `rows` is already in `(category, path)` order because we iterate
+    // `categories` in tooling order and `collect_md_files` sorts by path.
     let mut agents = Vec::with_capacity(rows.len());
     let mut index = BTreeMap::new();
     for (agent, entry) in rows {
@@ -1106,9 +1137,16 @@ pub(crate) async fn read_source(
 ) -> Result<String, AppError> {
     let adir = app_data_dir(app)?;
     let source = load_catalog_source(&adir).await;
-    let path = catalog_root(&adir, &source)
-        .join(category)
-        .join(format!("{slug}.md"));
+    let cat_dir = catalog_root(&adir, &source).join(category);
+    let fname = format!("{slug}.md");
+    // Flat path first (the common case); fall back to a recursive search for
+    // nested agents (e.g. game-development/godot/<slug>.md in a real clone).
+    let flat = cat_dir.join(&fname);
+    let path = if flat.exists() {
+        flat
+    } else {
+        find_md_under(&cat_dir, &fname).unwrap_or(flat)
+    };
     let bytes = read_capped(&path, MAX_AGENT_BYTES).await?;
     String::from_utf8(bytes).map_err(|e| AppError::Io {
         message: format!("agent source {slug}.md not UTF-8: {e}"),
@@ -1477,6 +1515,31 @@ mod tests {
         // design < engineering, and within engineering alpha < zeta.
         let order: Vec<&str> = corpus.agents.iter().map(|a| a.slug.as_str()).collect();
         assert_eq!(order, vec!["mid", "alpha", "zeta"]);
+    }
+
+    #[tokio::test]
+    async fn build_indexes_nested_agents() {
+        // Real clones nest agents in subdirs (game-development/godot/<slug>.md).
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write_agent(dir, "engineering", "flat-one", "Flat One", "x");
+        let nested = dir.join("game-development").join("godot");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(
+            nested.join("godot-shader-developer.md"),
+            "---\nname: Godot Shader Developer\ndescription: d\n---\nbody\n",
+        )
+        .unwrap();
+
+        let corpus = build_from_dir(dir, "v", &discover_categories(dir)).await.unwrap();
+        let nested_agent = corpus.get("godot-shader-developer");
+        assert!(nested_agent.is_some(), "nested agent must be indexed");
+        assert_eq!(
+            nested_agent.unwrap().category,
+            "game-development",
+            "category is the top-level dir, not the subdir"
+        );
+        assert!(corpus.get("flat-one").is_some(), "flat agent still indexed");
     }
 
     #[tokio::test]
