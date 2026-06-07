@@ -12,7 +12,7 @@
 //!    `AppState.updater_state`. If the UI requested an install of a
 //!    version we no longer have in memory (e.g. user kept Settings open
 //!    while a newer manifest landed via the auto-check), the call returns
-//!    `BrewError::InvalidArgument` rather than installing the wrong thing.
+//!    `AppError::InvalidArgument` rather than installing the wrong thing.
 //! 3. **Explicit downgrade rejection** — refuses to install a target whose
 //!    semver is less-than-or-equal to the running version. The plugin
 //!    already refuses semver-older targets via its default comparator,
@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 use tokio::sync::RwLock;
 
-use crate::error::BrewError;
+use crate::error::AppError;
 use crate::state::AppState;
 
 // ---------- IPC payloads ----------
@@ -52,7 +52,7 @@ use crate::state::AppState;
 /// frontend can `switch` over.
 ///
 /// The `Blocked` variant is **not** returned by this enum — paranoid
-/// mode surfaces as `Err(BrewError::ParanoidModeBlocked)` instead, so
+/// mode surfaces as `Err(AppError::ParanoidModeBlocked)` instead, so
 /// the toast routes through the same channel as every other gated call.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -124,15 +124,15 @@ pub struct UpdaterState {
 pub trait UpdaterBackend: Send + Sync {
     /// Run a fresh manifest fetch. `Ok(None)` means "no update available",
     /// `Ok(Some(_))` means the plugin found a newer version. Errors are
-    /// surfaced as `BrewError` so the IPC contract stays uniform.
-    async fn check(&self) -> Result<Option<CachedUpdate>, BrewError>;
+    /// surfaced as `AppError` so the IPC contract stays uniform.
+    async fn check(&self) -> Result<Option<CachedUpdate>, AppError>;
 
     /// Download + verify (sha256 + minisign) + install the update. The
     /// `version` arg is for sanity checking only; the plugin uses its
     /// own internal `Update` handle (cached from the most recent
     /// `check()` call) so we don't have to round-trip the full Update
     /// state through the trait boundary.
-    async fn download_and_install(&self, version: &str) -> Result<(), BrewError>;
+    async fn download_and_install(&self, version: &str) -> Result<(), AppError>;
 }
 
 /// Currently-running app version, surfaced for downgrade rejection
@@ -148,7 +148,7 @@ pub fn current_app_version() -> &'static str {
 ///
 /// The plugin's `UpdaterExt::updater().check().await` returns a typed
 /// `Update` value or `None`. We translate any failure into our typed
-/// `BrewError` family so the IPC contract stays uniform across the
+/// `AppError` family so the IPC contract stays uniform across the
 /// surface.
 #[cfg(not(test))]
 pub struct PluginBackend<R: tauri::Runtime> {
@@ -165,11 +165,11 @@ impl<R: tauri::Runtime> PluginBackend<R> {
     /// the plugin is cheap to instantiate and doing it eagerly at
     /// startup would force the manifest endpoint validation into the
     /// setup hook (failing builds with a malformed endpoint).
-    fn updater(&self) -> Result<tauri_plugin_updater::Updater, BrewError> {
+    fn updater(&self) -> Result<tauri_plugin_updater::Updater, AppError> {
         use tauri_plugin_updater::UpdaterExt;
         self.app
             .updater()
-            .map_err(|e| BrewError::Internal {
+            .map_err(|e| AppError::Internal {
                 message: format!("updater plugin init: {e}"),
             })
     }
@@ -178,7 +178,7 @@ impl<R: tauri::Runtime> PluginBackend<R> {
 #[cfg(not(test))]
 #[async_trait::async_trait]
 impl<R: tauri::Runtime> UpdaterBackend for PluginBackend<R> {
-    async fn check(&self) -> Result<Option<CachedUpdate>, BrewError> {
+    async fn check(&self) -> Result<Option<CachedUpdate>, AppError> {
         let updater = self.updater()?;
         let opt = updater
             .check()
@@ -195,7 +195,7 @@ impl<R: tauri::Runtime> UpdaterBackend for PluginBackend<R> {
         }))
     }
 
-    async fn download_and_install(&self, version: &str) -> Result<(), BrewError> {
+    async fn download_and_install(&self, version: &str) -> Result<(), AppError> {
         let updater = self.updater()?;
         let opt = updater
             .check()
@@ -205,7 +205,7 @@ impl<R: tauri::Runtime> UpdaterBackend for PluginBackend<R> {
             // Manifest no longer advertises an update. The frontend
             // requested an install but the manifest changed underneath
             // us; surface as InvalidArgument so the UI can refresh.
-            return Err(BrewError::InvalidArgument {
+            return Err(AppError::InvalidArgument {
                 message: format!(
                     "manifest no longer advertises update for {version}; refresh and retry"
                 ),
@@ -217,7 +217,7 @@ impl<R: tauri::Runtime> UpdaterBackend for PluginBackend<R> {
         // `AppState.updater_state.cached_available`; this is a second
         // line of defense at the plugin boundary.
         if update.version != version {
-            return Err(BrewError::InvalidArgument {
+            return Err(AppError::InvalidArgument {
                 message: format!(
                     "manifest version drifted: requested {version}, manifest reports {}",
                     update.version
@@ -227,7 +227,7 @@ impl<R: tauri::Runtime> UpdaterBackend for PluginBackend<R> {
 
         // Download + verify (sha256 + minisign) → install. The plugin's
         // `download_and_install` runs both crypto checks; any failure
-        // is translated to our typed `BrewError` family.
+        // is translated to our typed `AppError` family.
         update
             .download_and_install(|_, _| {}, || {})
             .await
@@ -237,22 +237,22 @@ impl<R: tauri::Runtime> UpdaterBackend for PluginBackend<R> {
     }
 }
 
-/// Map a plugin `Error` onto our typed `BrewError` family. The plugin's
+/// Map a plugin `Error` onto our typed `AppError` family. The plugin's
 /// own error type carries enough context to discriminate hash mismatch
 /// from signature failure, but its `Display` string is the most reliable
 /// classifier across versions (the variants change between minor
 /// releases).
 #[cfg(not(test))]
-fn translate_plugin_error(e: tauri_plugin_updater::Error, context: &str) -> BrewError {
+fn translate_plugin_error(e: tauri_plugin_updater::Error, context: &str) -> AppError {
     let msg = e.to_string();
     let lower = msg.to_lowercase();
     // Signature / minisign failures map to `SignatureVerificationFailed`
     // so the UI surfaces the same toast as a sha256 mismatch (both are
     // "the bytes did not verify, abort").
     if lower.contains("signature") || lower.contains("minisign") || lower.contains("pubkey") {
-        BrewError::SignatureVerificationFailed { message: msg }
+        AppError::SignatureVerificationFailed { message: msg }
     } else {
-        BrewError::Network {
+        AppError::Network {
             url: context.to_string(),
             message: msg,
         }
@@ -303,7 +303,7 @@ fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
 pub async fn run_check(
     state: &AppState,
     backend: &dyn UpdaterBackend,
-) -> Result<UpdateCheckOutcome, BrewError> {
+) -> Result<UpdateCheckOutcome, AppError> {
     state.require_network("update_check").await?;
     let raw = backend.check().await?;
     let now = chrono::Utc::now().timestamp();
@@ -363,7 +363,7 @@ pub async fn run_install(
     state: &AppState,
     backend: &dyn UpdaterBackend,
     version: &str,
-) -> Result<(), BrewError> {
+) -> Result<(), AppError> {
     state.require_network("update_check").await?;
 
     // 1. Sanity check the caller-supplied version against the in-memory
@@ -375,13 +375,13 @@ pub async fn run_install(
         let guard = state.updater_state.read().await;
         guard.cached_available.clone()
     };
-    let cached = cached.ok_or_else(|| BrewError::InvalidArgument {
+    let cached = cached.ok_or_else(|| AppError::InvalidArgument {
         message: format!(
             "no update available to install; run update_check_now first (requested {version})"
         ),
     })?;
     if cached.version != version {
-        return Err(BrewError::InvalidArgument {
+        return Err(AppError::InvalidArgument {
             message: format!(
                 "install version mismatch: requested {version}, cached available is {}",
                 cached.version
@@ -394,7 +394,7 @@ pub async fn run_install(
     // behaviour change cannot reopen the hole if we re-check here).
     let current = current_app_version();
     if !is_strict_upgrade(current, version) {
-        return Err(BrewError::DowngradeRejected {
+        return Err(AppError::DowngradeRejected {
             current: current.to_string(),
             target: version.to_string(),
         });
@@ -424,7 +424,7 @@ pub async fn run_install(
 /// Run a manual update check. Frontend-callable via the "Check for
 /// updates now" button in Settings → Network → Updates.
 ///
-/// Returns `UpdateCheckOutcome` on success or `BrewError` on failure
+/// Returns `UpdateCheckOutcome` on success or `AppError` on failure
 /// (including `ParanoidModeBlocked` when Offline Mode is on, surfaced
 /// as the typed error rather than a fourth enum variant so the toast
 /// channel stays uniform with every other gated call).
@@ -432,7 +432,7 @@ pub async fn run_install(
 pub async fn update_check_now(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
-) -> Result<UpdateCheckOutcome, BrewError> {
+) -> Result<UpdateCheckOutcome, AppError> {
     #[cfg(test)]
     {
         let _ = (app, state);
@@ -440,7 +440,7 @@ pub async fn update_check_now(
         // directly via the trait. The `app` + `state` parameters are
         // retained so the IPC signature stays uniform with the
         // production build.
-        Err(BrewError::Internal {
+        Err(AppError::Internal {
             message: "update_check_now is not callable in tests".into(),
         })
     }
@@ -459,11 +459,11 @@ pub async fn update_install(
     version: String,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
-) -> Result<(), BrewError> {
+) -> Result<(), AppError> {
     #[cfg(test)]
     {
         let _ = (app, version, state);
-        Err(BrewError::Internal {
+        Err(AppError::Internal {
             message: "update_install is not callable in tests".into(),
         })
     }
@@ -485,12 +485,12 @@ pub async fn update_install(
 /// instead — the frontend's optimistic UI clear of `available` still
 /// hides the indicator for this session; the user must reset settings
 /// before a persisted skip is possible.
-pub async fn run_skip(state: &AppState, version: &str) -> Result<(), BrewError> {
+pub async fn run_skip(state: &AppState, version: &str) -> Result<(), AppError> {
     use crate::commands::settings::{persist, SettingsLoadState};
 
     // Validate the version arg — defensive against UI passing garbage.
     if version.trim().is_empty() || version.len() > 64 {
-        return Err(BrewError::InvalidArgument {
+        return Err(AppError::InvalidArgument {
             message: format!("invalid version for skip: {version:?}"),
         });
     }
@@ -515,7 +515,7 @@ pub async fn run_skip(state: &AppState, version: &str) -> Result<(), BrewError> 
                 s
             }
             SettingsLoadState::Corrupt { message } => {
-                return Err(BrewError::Internal {
+                return Err(AppError::Internal {
                     message: format!(
                         "cannot record update skip while settings file is unreadable \
                          ({message}); reset settings from Settings → Network first"
@@ -563,7 +563,7 @@ pub async fn run_skip(state: &AppState, version: &str) -> Result<(), BrewError> 
 pub async fn update_skip(
     version: String,
     state: State<'_, AppState>,
-) -> Result<(), BrewError> {
+) -> Result<(), AppError> {
     run_skip(&state, &version).await
 }
 
@@ -579,11 +579,11 @@ pub async fn update_skip(
 ///
 /// No `require_network` gate: this is a purely local process action.
 #[tauri::command]
-pub async fn update_relaunch(app: tauri::AppHandle) -> Result<(), BrewError> {
+pub async fn update_relaunch(app: tauri::AppHandle) -> Result<(), AppError> {
     #[cfg(test)]
     {
         let _ = app;
-        Err(BrewError::Internal {
+        Err(AppError::Internal {
             message: "update_relaunch is not callable in tests".into(),
         })
     }
@@ -753,13 +753,13 @@ mod tests {
 
     /// In-memory mock backend.
     struct MockBackend {
-        check_result: Mutex<Result<Option<CachedUpdate>, BrewError>>,
-        install_result: Mutex<Result<(), BrewError>>,
+        check_result: Mutex<Result<Option<CachedUpdate>, AppError>>,
+        install_result: Mutex<Result<(), AppError>>,
         check_calls: Mutex<u32>,
     }
 
     impl MockBackend {
-        fn returning(check: Result<Option<CachedUpdate>, BrewError>) -> Self {
+        fn returning(check: Result<Option<CachedUpdate>, AppError>) -> Self {
             Self {
                 check_result: Mutex::new(check),
                 install_result: Mutex::new(Ok(())),
@@ -768,8 +768,8 @@ mod tests {
         }
 
         fn install_returning(
-            check: Result<Option<CachedUpdate>, BrewError>,
-            install: Result<(), BrewError>,
+            check: Result<Option<CachedUpdate>, AppError>,
+            install: Result<(), AppError>,
         ) -> Self {
             Self {
                 check_result: Mutex::new(check),
@@ -781,11 +781,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl UpdaterBackend for MockBackend {
-        async fn check(&self) -> Result<Option<CachedUpdate>, BrewError> {
+        async fn check(&self) -> Result<Option<CachedUpdate>, AppError> {
             *self.check_calls.lock().unwrap() += 1;
             self.check_result.lock().unwrap().clone()
         }
-        async fn download_and_install(&self, _version: &str) -> Result<(), BrewError> {
+        async fn download_and_install(&self, _version: &str) -> Result<(), AppError> {
             self.install_result.lock().unwrap().clone()
         }
     }
@@ -875,7 +875,7 @@ mod tests {
         let backend = MockBackend::returning(Ok(None));
         let r = run_check(&state, &backend).await;
         match r {
-            Err(BrewError::ParanoidModeBlocked { feature }) => {
+            Err(AppError::ParanoidModeBlocked { feature }) => {
                 assert_eq!(feature, "update_check");
             }
             other => panic!("expected ParanoidModeBlocked, got {other:?}"),
@@ -901,7 +901,7 @@ mod tests {
         // UI requests install of an OLDER version than the cache (stale UI).
         let r = run_install(&state, &backend, "0.3.0").await;
         match r {
-            Err(BrewError::InvalidArgument { message }) => {
+            Err(AppError::InvalidArgument { message }) => {
                 assert!(message.contains("mismatch"), "got: {message}");
             }
             other => panic!("expected InvalidArgument, got {other:?}"),
@@ -915,7 +915,7 @@ mod tests {
         let backend = MockBackend::returning(Ok(None));
         let r = run_install(&state, &backend, "9.9.9").await;
         match r {
-            Err(BrewError::InvalidArgument { message }) => {
+            Err(AppError::InvalidArgument { message }) => {
                 assert!(message.contains("no update available"), "got: {message}");
             }
             other => panic!("expected InvalidArgument, got {other:?}"),
@@ -939,7 +939,7 @@ mod tests {
 
         let r = run_install(&state, &backend, &current).await;
         match r {
-            Err(BrewError::DowngradeRejected { current: c, target: t }) => {
+            Err(AppError::DowngradeRejected { current: c, target: t }) => {
                 assert_eq!(c, current);
                 assert_eq!(t, current);
             }
@@ -959,7 +959,7 @@ mod tests {
                 notes: None,
                 pub_date: None,
             })),
-            Err(BrewError::SignatureVerificationFailed {
+            Err(AppError::SignatureVerificationFailed {
                 message: "minisign rejected".into(),
             }),
         );
@@ -967,7 +967,7 @@ mod tests {
 
         let r = run_install(&state, &backend, "9.9.9").await;
         match r {
-            Err(BrewError::SignatureVerificationFailed { message }) => {
+            Err(AppError::SignatureVerificationFailed { message }) => {
                 assert!(message.contains("minisign"), "got: {message}");
             }
             other => panic!("expected SignatureVerificationFailed, got {other:?}"),
@@ -986,7 +986,7 @@ mod tests {
                 notes: None,
                 pub_date: None,
             })),
-            Err(BrewError::HashMismatch {
+            Err(AppError::HashMismatch {
                 expected: "deadbeef".into(),
                 actual: "cafef00d".into(),
             }),
@@ -995,7 +995,7 @@ mod tests {
 
         let r = run_install(&state, &backend, "9.9.9").await;
         match r {
-            Err(BrewError::HashMismatch { expected, actual }) => {
+            Err(AppError::HashMismatch { expected, actual }) => {
                 assert_eq!(expected, "deadbeef");
                 assert_eq!(actual, "cafef00d");
             }
@@ -1016,7 +1016,7 @@ mod tests {
 
         let r = run_skip(&state, "9.9.9").await;
         match r {
-            Err(BrewError::Internal { message }) => {
+            Err(AppError::Internal { message }) => {
                 assert!(
                     message.contains("unreadable"),
                     "expected unreadable message, got: {message}"
@@ -1045,7 +1045,7 @@ mod tests {
         let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
         let r = run_skip(&state, "").await;
         match r {
-            Err(BrewError::InvalidArgument { .. }) => {}
+            Err(AppError::InvalidArgument { .. }) => {}
             other => panic!("expected InvalidArgument, got {other:?}"),
         }
     }
@@ -1093,7 +1093,7 @@ mod tests {
         let backend = MockBackend::returning(Ok(None));
         let r = run_install(&state, &backend, "9.9.9").await;
         match r {
-            Err(BrewError::ParanoidModeBlocked { feature }) => {
+            Err(AppError::ParanoidModeBlocked { feature }) => {
                 assert_eq!(feature, "update_check");
             }
             other => panic!("expected ParanoidModeBlocked, got {other:?}"),

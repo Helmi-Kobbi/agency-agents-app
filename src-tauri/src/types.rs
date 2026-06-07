@@ -43,6 +43,106 @@ pub enum Scope {
     Project,
 }
 
+// ---------- Catalog source (where the corpus lives) ----------
+
+/// Where the active agent catalog lives on disk. The whole app reads/writes the
+/// resolved root, so this is the one knob that says "be a respectful frontend
+/// over the user's clone" vs "manage our own copy." Persisted to
+/// `state/catalog.json`. Serialized tagged on `kind` so the TS side is a clean
+/// discriminated union.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CatalogSource {
+    /// App-managed copy seeded from the bundled baseline (`<app_data>/corpus`).
+    /// The always-works default; never touches anything outside app data.
+    Bundled,
+    /// A clone the app provisioned and owns (default `~/.agency-agents`). The
+    /// app may pull/refresh it; it's shared with the CLI.
+    Managed { path: String },
+    /// The user's own pre-existing clone. `manage` records whether the user
+    /// granted permission to pull it (manage-with-permission); when false we
+    /// only ever read from it.
+    UserClone { path: String, manage: bool },
+}
+
+impl Default for CatalogSource {
+    fn default() -> Self {
+        CatalogSource::Bundled
+    }
+}
+
+/// A catalog directory discovered on disk (for the first-run / Settings picker).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogCandidate {
+    /// Absolute path to the candidate catalog root.
+    pub path: String,
+    /// `"managed"` for `~/.agency-agents`, else `"userClone"`.
+    pub kind: String,
+    /// Whether it's a git checkout (has `.git`) — drives pull strategy.
+    pub has_git: bool,
+    /// Quick agent count (top-level `.md` across discovered categories).
+    pub agent_count: u32,
+}
+
+/// Result of `catalog_detect` — what the app found, plus whether `git` is on
+/// PATH (so the UI can explain clone vs snapshot provisioning).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogDetection {
+    pub git_available: bool,
+    /// True when a filesystem scan of common dev roots was performed (the
+    /// "Find Agency Agents" button), vs the cheap `~/.agency-agents`-only check.
+    pub scanned: bool,
+    pub candidates: Vec<CatalogCandidate>,
+}
+
+/// Live status of the active catalog — source, git provenance, and freshness.
+/// Powers the Settings → Catalog panel ("manage the repo": which commit, how
+/// far behind, what GitHub repo). All git fields are `None`/0 for a non-git
+/// (bundled snapshot) source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogStatus {
+    pub source: CatalogSource,
+    /// Catalog root path (None for the bundled, app-data-internal source).
+    pub root: Option<String>,
+    pub is_git: bool,
+    pub branch: Option<String>,
+    /// Short commit SHA of HEAD.
+    pub commit: Option<String>,
+    pub last_commit_subject: Option<String>,
+    pub last_commit_date: Option<String>,
+    /// Count of uncommitted working-tree changes.
+    pub dirty_count: u32,
+    /// `origin` remote URL, if a git checkout.
+    pub remote_url: Option<String>,
+    /// `owner/repo` parsed from the remote (for GitHub repo stats), if it's a
+    /// github.com remote.
+    pub repo_slug: Option<String>,
+    pub version: String,
+    pub fetched_at: String,
+    pub agent_count: u32,
+}
+
+/// Result of checking the active catalog for upstream updates — the "stats on
+/// diffs" view. Git sources fetch + compare against the upstream branch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogUpdateCheck {
+    pub is_git: bool,
+    /// Commits the upstream branch has that we don't (how far behind).
+    pub behind: u32,
+    /// Commits we have that upstream doesn't (local work).
+    pub ahead: u32,
+    /// Files that would change on pull.
+    pub changed_files: u32,
+    /// Human-readable `git diff --stat` of HEAD..upstream.
+    pub diffstat: String,
+    /// True when already at the upstream tip (git) — no-op pull.
+    pub up_to_date: bool,
+}
+
 // ---------- Agent (parsed from the corpus) ----------
 
 /// An agent as parsed from a single corpus `.md` file. `body` is the
@@ -167,6 +267,24 @@ pub struct InstalledAgent {
     pub dest: String,
     pub state: InstallState,
     pub update_kind: Option<UpdateKind>,
+}
+
+/// Result of `agent_diff` — what's on disk now vs the canonical render the app
+/// would write. Powers "review before Update": the UI can show the user exactly
+/// what an Update/Restore would change before any file is touched.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentDiff {
+    pub slug: String,
+    pub tool: Tool,
+    pub project_path: Option<String>,
+    pub dest: String,
+    /// Current on-disk contents (None if the file is missing).
+    pub on_disk: Option<String>,
+    /// The canonical render the app would write.
+    pub proposed: String,
+    /// Whether the two differ (false ⇒ Update is a no-op).
+    pub differs: bool,
 }
 
 // ---------- Tools / categories / projects ----------

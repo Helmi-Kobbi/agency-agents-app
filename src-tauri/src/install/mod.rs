@@ -17,11 +17,11 @@ use chrono::Utc;
 use tauri::{AppHandle, State};
 
 use crate::corpus;
-use crate::error::BrewError;
+use crate::error::AppError;
 use crate::render;
 use crate::state::AppState;
 use crate::types::{
-    InstallRecord, InstallState, InstalledAgent, ProjectInfo, Tool, ToolInfo, UpdateKind,
+    AgentDiff, InstallRecord, InstallState, InstalledAgent, ProjectInfo, Tool, ToolInfo, UpdateKind,
 };
 use crate::util::fs::{atomic_write, read_capped};
 
@@ -30,42 +30,111 @@ const MAX_INSTALLED_BYTES: u64 = 4 * 1024 * 1024;
 
 // ---------- Ledger persistence ----------
 
-fn ledger_path(app: &AppHandle) -> Result<PathBuf, BrewError> {
+fn ledger_path(app: &AppHandle) -> Result<PathBuf, AppError> {
     let adir = corpus::app_data_dir(app)?;
     Ok(corpus::state_dir(&adir).join("installs.json"))
 }
 
-async fn load_ledger(app: &AppHandle) -> Result<Vec<InstallRecord>, BrewError> {
+async fn load_ledger(app: &AppHandle) -> Result<Vec<InstallRecord>, AppError> {
     let path = ledger_path(app)?;
     match tokio::fs::read(&path).await {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| BrewError::Io {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| AppError::Io {
             message: format!("parse installs.json: {e}"),
         }),
         Err(_) => Ok(Vec::new()), // no ledger yet — nothing installed
     }
 }
 
-async fn save_ledger(app: &AppHandle, records: &[InstallRecord]) -> Result<(), BrewError> {
+async fn save_ledger(app: &AppHandle, records: &[InstallRecord]) -> Result<(), AppError> {
     let path = ledger_path(app)?;
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| BrewError::Io {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| AppError::Io {
             message: format!("create state dir {}: {e}", parent.display()),
         })?;
     }
-    let bytes = serde_json::to_vec_pretty(records).map_err(|e| BrewError::Io {
+    let bytes = serde_json::to_vec_pretty(records).map_err(|e| AppError::Io {
         message: format!("serialize installs.json: {e}"),
     })?;
     atomic_write(&path, &bytes).await
 }
 
-fn home() -> Result<PathBuf, BrewError> {
-    dirs::home_dir().ok_or_else(|| BrewError::Io {
+fn home() -> Result<PathBuf, AppError> {
+    dirs::home_dir().ok_or_else(|| AppError::Io {
         message: "cannot resolve home directory".into(),
     })
 }
 
 fn now_iso() -> String {
     Utc::now().to_rfc3339()
+}
+
+/// Where overwritten files are preserved before a write replaces them. Lives
+/// under app data, NOT inside any tool's agent dir — so the Foreign sweep never
+/// mistakes a backup for an installed agent. Every destructive write copies the
+/// prior bytes here first, making install/update/restore reversible.
+fn backups_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
+    let adir = corpus::app_data_dir(app)?;
+    Ok(adir.join("backups"))
+}
+
+/// Filesystem-safe variant of an RFC3339 timestamp (no colons).
+fn fs_stamp(iso: &str) -> String {
+    iso.replace([':', '/'], "-")
+}
+
+/// Build the ledger record for a render. Shared by the write path
+/// (`write_agent_files`) and the no-write Track path so both agree on what a
+/// row looks like.
+#[allow(clippy::too_many_arguments)]
+fn record_for(
+    agent: &crate::types::Agent,
+    primary_dest: &Path,
+    tool: Tool,
+    project_root: Option<&Path>,
+    rendered_hash: String,
+    source_hash: &str,
+    body_hash: &str,
+    corpus_version: &str,
+    installed_at: &str,
+) -> InstallRecord {
+    InstallRecord {
+        slug: agent.slug.clone(),
+        tool,
+        scope: tool.scope(),
+        project_path: project_root.map(|p| p.to_string_lossy().to_string()),
+        dest: primary_dest.to_string_lossy().to_string(),
+        source_hash: source_hash.to_string(),
+        body_hash: body_hash.to_string(),
+        rendered_hash,
+        installed_at: installed_at.to_string(),
+        corpus_version: corpus_version.to_string(),
+    }
+}
+
+/// Copy `dest`'s current bytes into `backup_dir` before it's overwritten, but
+/// only if it exists AND differs from the incoming bytes (no-op writes leave no
+/// litter). Backup name keeps the original filename + a timestamp so it's
+/// human-recoverable. Best-effort within a still-fallible signature: a failed
+/// backup aborts the write (we never overwrite what we couldn't preserve).
+async fn backup_if_differs(
+    dest: &Path,
+    new_bytes: &[u8],
+    backup_dir: &Path,
+    stamp: &str,
+) -> Result<(), AppError> {
+    let existing = match tokio::fs::read(dest).await {
+        Ok(b) => b,
+        Err(_) => return Ok(()), // nothing on disk → nothing to preserve
+    };
+    if existing == new_bytes {
+        return Ok(()); // identical → not a destructive write
+    }
+    tokio::fs::create_dir_all(backup_dir).await.map_err(|e| AppError::Io {
+        message: format!("create backups dir {}: {e}", backup_dir.display()),
+    })?;
+    let fname = dest.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "agent".into());
+    let backup = backup_dir.join(format!("{fname}.{}.bak", fs_stamp(stamp)));
+    atomic_write(&backup, &existing).await
 }
 
 // ---------- Install / update (shared core) ----------
@@ -76,24 +145,26 @@ async fn do_install(
     slug: String,
     tool: Tool,
     project_path: Option<String>,
-) -> Result<InstallRecord, BrewError> {
+) -> Result<InstallRecord, AppError> {
     let corpus = corpus::ensure_corpus(app, state).await?;
-    let agent = corpus.get(&slug).ok_or_else(|| BrewError::Io {
+    let agent = corpus.get(&slug).ok_or_else(|| AppError::Io {
         message: format!("unknown agent: {slug}"),
     })?;
-    let entry = corpus.entry(&slug).ok_or_else(|| BrewError::Io {
+    let entry = corpus.entry(&slug).ok_or_else(|| AppError::Io {
         message: format!("no corpus-index entry for {slug}"),
     })?;
     let raw = corpus::read_source(app, &agent.category, &slug).await?;
 
     let home = home()?;
     let proot = project_path.as_ref().map(PathBuf::from);
+    let backups = backups_dir(app)?;
     let record = write_agent_files(
         &agent,
         &raw,
         tool,
         &home,
         proot.as_deref(),
+        Some(&backups),
         &entry.source_hash,
         &entry.body_hash,
         &corpus.version(),
@@ -108,12 +179,55 @@ async fn do_install(
     Ok(record)
 }
 
-/// Render + write the agent file(s) and build the ledger record. Pure of Tauri
-/// (`home`/`project_root` passed explicitly) so the full render→write→record
-/// path is unit-testable against a tempdir. Returns the record; caller persists
-/// it to the ledger.
+/// Track a recognized on-disk agent into the ledger **without writing anything**
+/// (contrast `do_install`, which renders + overwrites). We record the canonical
+/// render's hash + the current corpus source/body hashes, but leave the user's
+/// file exactly as it is. Reconcile then tells the truth: if the on-disk bytes
+/// match the canonical render it shows `Current`; if they differ (older catalog
+/// version, or hand-edited) it shows `Modified`, and an explicit Update (which
+/// backs up first) reconciles it. This is the safe replacement for "Adopt".
+async fn do_track(
+    app: &AppHandle,
+    state: &AppState,
+    slug: String,
+    tool: Tool,
+    project_path: Option<String>,
+) -> Result<InstallRecord, AppError> {
+    let corpus = corpus::ensure_corpus(app, state).await?;
+    let agent = corpus.get(&slug).ok_or_else(|| AppError::Io {
+        message: format!("unknown agent: {slug}"),
+    })?;
+    let entry = corpus.entry(&slug).ok_or_else(|| AppError::Io {
+        message: format!("no corpus-index entry for {slug}"),
+    })?;
+    let raw = corpus::read_source(app, &agent.category, &slug).await?;
+
+    let home = home()?;
+    let proot = project_path.as_ref().map(PathBuf::from);
+    let record = track_agent_record(
+        &agent,
+        &raw,
+        tool,
+        &home,
+        proot.as_deref(),
+        &entry.source_hash,
+        &entry.body_hash,
+        &corpus.version(),
+        &now_iso(),
+    )?;
+
+    let mut ledger = load_ledger(app).await?;
+    ledger.retain(|r| !(r.slug == slug && r.tool == tool && r.project_path == project_path));
+    ledger.push(record.clone());
+    save_ledger(app, &ledger).await?;
+    Ok(record)
+}
+
+/// Build a ledger record for Track: compute the canonical render's hash and the
+/// destination, but write NOTHING. Pure (Tauri-free) so it's unit-testable
+/// against a tempdir — and the test can assert no file appears.
 #[allow(clippy::too_many_arguments)]
-async fn write_agent_files(
+fn track_agent_record(
     agent: &crate::types::Agent,
     raw: &str,
     tool: Tool,
@@ -123,29 +237,68 @@ async fn write_agent_files(
     body_hash: &str,
     corpus_version: &str,
     installed_at: &str,
-) -> Result<InstallRecord, BrewError> {
+) -> Result<InstallRecord, AppError> {
+    let (_bytes, rendered_hash) = render::render_with_hash(agent, raw, tool)?;
+    let paths = render::dests(tool, &agent.slug, home, project_root)?;
+    Ok(record_for(
+        agent,
+        &paths[0],
+        tool,
+        project_root,
+        rendered_hash,
+        source_hash,
+        body_hash,
+        corpus_version,
+        installed_at,
+    ))
+}
+
+/// Render + write the agent file(s) and build the ledger record. Pure of Tauri
+/// (`home`/`project_root` passed explicitly) so the full render→write→record
+/// path is unit-testable against a tempdir. Returns the record; caller persists
+/// it to the ledger.
+///
+/// When `backup_dir` is `Some`, any existing dest whose bytes differ from the
+/// incoming render is copied there before being overwritten — every destructive
+/// write is reversible. `None` skips backups (only for callers that have already
+/// guaranteed there's nothing to preserve).
+#[allow(clippy::too_many_arguments)]
+async fn write_agent_files(
+    agent: &crate::types::Agent,
+    raw: &str,
+    tool: Tool,
+    home: &Path,
+    project_root: Option<&Path>,
+    backup_dir: Option<&Path>,
+    source_hash: &str,
+    body_hash: &str,
+    corpus_version: &str,
+    installed_at: &str,
+) -> Result<InstallRecord, AppError> {
     let (bytes, rendered_hash) = render::render_with_hash(agent, raw, tool)?;
     let paths = render::dests(tool, &agent.slug, home, project_root)?;
     for dest in &paths {
+        if let Some(bdir) = backup_dir {
+            backup_if_differs(dest, bytes.as_bytes(), bdir, installed_at).await?;
+        }
         if let Some(parent) = dest.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| BrewError::Io {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| AppError::Io {
                 message: format!("create {}: {e}", parent.display()),
             })?;
         }
         atomic_write(dest, bytes.as_bytes()).await?;
     }
-    Ok(InstallRecord {
-        slug: agent.slug.clone(),
+    Ok(record_for(
+        agent,
+        &paths[0],
         tool,
-        scope: tool.scope(),
-        project_path: project_root.map(|p| p.to_string_lossy().to_string()),
-        dest: paths[0].to_string_lossy().to_string(),
-        source_hash: source_hash.to_string(),
-        body_hash: body_hash.to_string(),
+        project_root,
         rendered_hash,
-        installed_at: installed_at.to_string(),
-        corpus_version: corpus_version.to_string(),
-    })
+        source_hash,
+        body_hash,
+        corpus_version,
+        installed_at,
+    ))
 }
 
 // ---------- Reconciliation core (pure, testable) ----------
@@ -214,12 +367,14 @@ pub async fn install_agent(
     slug: String,
     tool: Tool,
     project_path: Option<String>,
-) -> Result<InstallRecord, BrewError> {
+) -> Result<InstallRecord, AppError> {
     do_install(&app, &state, slug, tool, project_path).await
 }
 
-/// Update an Outdated install to the current corpus version (re-render + write).
-/// Same mechanics as install; separate command for intent + future UX.
+/// Update an install to the current corpus version (re-render + write). The
+/// prior file is backed up first (see `do_install`), so an Update applied to a
+/// Modified file preserves the user's edits in `backups/` before restoring the
+/// canonical render. Separate command from install for intent + UX.
 #[tauri::command]
 pub async fn update_agent(
     app: AppHandle,
@@ -227,22 +382,61 @@ pub async fn update_agent(
     slug: String,
     tool: Tool,
     project_path: Option<String>,
-) -> Result<InstallRecord, BrewError> {
+) -> Result<InstallRecord, AppError> {
     do_install(&app, &state, slug, tool, project_path).await
 }
 
-/// Adopt a recognized Foreign install into the ledger by re-rendering the
-/// current corpus version and recording it. (Overwrites the on-disk file with
-/// the canonical render so provenance is exact going forward.)
+/// Track a recognized Foreign install into the ledger **non-destructively** —
+/// we record provenance but never write to the user's file. This is the safe
+/// replacement for the old "Adopt" (which overwrote the on-disk file). After
+/// tracking, reconcile shows `Current` if the file already matches the canonical
+/// render, or `Modified` if it differs (then an explicit Update reconciles it).
 #[tauri::command]
-pub async fn adopt_agent(
+pub async fn track_agent(
     app: AppHandle,
     state: State<'_, AppState>,
     slug: String,
     tool: Tool,
     project_path: Option<String>,
-) -> Result<InstallRecord, BrewError> {
-    do_install(&app, &state, slug, tool, project_path).await
+) -> Result<InstallRecord, AppError> {
+    do_track(&app, &state, slug, tool, project_path).await
+}
+
+/// Diff what's on disk against the canonical render the app would write — powers
+/// "review before Update" without touching any file.
+#[tauri::command]
+pub async fn agent_diff(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    slug: String,
+    tool: Tool,
+    project_path: Option<String>,
+) -> Result<AgentDiff, AppError> {
+    let corpus = corpus::ensure_corpus(&app, &state).await?;
+    let agent = corpus.get(&slug).ok_or_else(|| AppError::Io {
+        message: format!("unknown agent: {slug}"),
+    })?;
+    let raw = corpus::read_source(&app, &agent.category, &slug).await?;
+    let (proposed, _hash) = render::render_with_hash(&agent, &raw, tool)?;
+
+    let home = home()?;
+    let proot = project_path.as_ref().map(PathBuf::from);
+    let paths = render::dests(tool, &slug, &home, proot.as_deref())?;
+    let dest = &paths[0];
+    let on_disk = match read_capped(dest, MAX_INSTALLED_BYTES).await {
+        Ok(b) => Some(String::from_utf8_lossy(&b).into_owned()),
+        Err(_) => None,
+    };
+    let differs = on_disk.as_deref() != Some(proposed.as_str());
+    Ok(AgentDiff {
+        slug,
+        tool,
+        project_path,
+        dest: dest.to_string_lossy().to_string(),
+        on_disk,
+        proposed,
+        differs,
+    })
 }
 
 /// Uninstall: remove the written file(s) and the ledger row.
@@ -253,7 +447,7 @@ pub async fn uninstall_agent(
     slug: String,
     tool: Tool,
     project_path: Option<String>,
-) -> Result<(), BrewError> {
+) -> Result<(), AppError> {
     let home = home()?;
     let proot = project_path.as_ref().map(PathBuf::from);
     if let Ok(paths) = render::dests(tool, &slug, &home, proot.as_deref()) {
@@ -273,7 +467,7 @@ pub async fn uninstall_agent(
 pub async fn installs_reconcile(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<Vec<InstalledAgent>, BrewError> {
+) -> Result<Vec<InstalledAgent>, AppError> {
     let corpus = corpus::ensure_corpus(&app, &state).await?;
     let ledger = load_ledger(&app).await?;
     let mut out = Vec::with_capacity(ledger.len());
@@ -316,7 +510,7 @@ pub async fn installs_reconcile(
     }
 
     // Foreign sweep: files on disk we did NOT install but recognize as corpus
-    // agents (slug matches a known agent), so the user can Adopt them. Scans
+    // agents (slug matches a known agent), so the user can Track them. Scans
     // each supported tool's dir(s) — user dirs + every project dir in the ledger.
     let ledger_keys: std::collections::HashSet<(String, Tool, Option<String>)> = ledger
         .iter()
@@ -398,14 +592,14 @@ fn agent_dirs(tool: Tool, home: &Path, project_root: Option<&Path>) -> Vec<PathB
 pub async fn installs_for_agent(
     app: AppHandle,
     slug: String,
-) -> Result<Vec<InstallRecord>, BrewError> {
+) -> Result<Vec<InstallRecord>, AppError> {
     let ledger = load_ledger(&app).await?;
     Ok(ledger.into_iter().filter(|r| r.slug == slug).collect())
 }
 
 /// Detected AI tools + their deployment surface and installed counts.
 #[tauri::command]
-pub async fn tools_list(app: AppHandle) -> Result<Vec<ToolInfo>, BrewError> {
+pub async fn tools_list(app: AppHandle) -> Result<Vec<ToolInfo>, AppError> {
     let ledger = load_ledger(&app).await?;
     let home = home()?;
     let mut out = Vec::with_capacity(SUPPORTED.len());
@@ -426,7 +620,7 @@ pub async fn tools_list(app: AppHandle) -> Result<Vec<ToolInfo>, BrewError> {
 
 /// Project directories we've installed project-scoped agents into.
 #[tauri::command]
-pub async fn projects_list(app: AppHandle) -> Result<Vec<ProjectInfo>, BrewError> {
+pub async fn projects_list(app: AppHandle) -> Result<Vec<ProjectInfo>, AppError> {
     let ledger = load_ledger(&app).await?;
     let mut counts: BTreeMap<String, u32> = BTreeMap::new();
     for r in &ledger {
@@ -469,7 +663,7 @@ struct LoadoutEntry {
 
 /// Export the current ledger as an Agentfile written to `path`. Returns count.
 #[tauri::command]
-pub async fn loadout_export(app: AppHandle, path: String) -> Result<u32, BrewError> {
+pub async fn loadout_export(app: AppHandle, path: String) -> Result<u32, AppError> {
     let ledger = load_ledger(&app).await?;
     let installs: Vec<LoadoutEntry> = ledger
         .iter()
@@ -481,7 +675,7 @@ pub async fn loadout_export(app: AppHandle, path: String) -> Result<u32, BrewErr
         .collect();
     let n = installs.len() as u32;
     let af = Agentfile { agentfile: 1, installs };
-    let bytes = serde_json::to_vec_pretty(&af).map_err(|e| BrewError::Io {
+    let bytes = serde_json::to_vec_pretty(&af).map_err(|e| AppError::Io {
         message: format!("serialize Agentfile: {e}"),
     })?;
     atomic_write(Path::new(&path), &bytes).await?;
@@ -496,9 +690,9 @@ pub async fn loadout_import(
     app: AppHandle,
     state: State<'_, AppState>,
     path: String,
-) -> Result<Vec<InstallRecord>, BrewError> {
+) -> Result<Vec<InstallRecord>, AppError> {
     let bytes = read_capped(Path::new(&path), MAX_INSTALLED_BYTES).await?;
-    let af: Agentfile = serde_json::from_slice(&bytes).map_err(|e| BrewError::Io {
+    let af: Agentfile = serde_json::from_slice(&bytes).map_err(|e| AppError::Io {
         message: format!("parse Agentfile: {e}"),
     })?;
     let mut out = Vec::with_capacity(af.installs.len());
@@ -571,7 +765,7 @@ mod tests {
 
         // Codex (user-scoped, TOML transform).
         let rec = write_agent_files(
-            &agent, raw, Tool::Codex, home.path(), None, "src-1", "body-1", "v1",
+            &agent, raw, Tool::Codex, home.path(), None, None, "src-1", "body-1", "v1",
             "2026-06-05T00:00:00Z",
         )
         .await
@@ -610,7 +804,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let raw = "---\nname: Frontend Developer\ncolor: blue\n---\nVERBATIM BODY\n";
         write_agent_files(
-            &sample_agent(), raw, Tool::ClaudeCode, home.path(), None, "s", "b", "v", "t",
+            &sample_agent(), raw, Tool::ClaudeCode, home.path(), None, None, "s", "b", "v", "t",
         )
         .await
         .unwrap();
@@ -623,13 +817,90 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let proj = tempfile::tempdir().unwrap();
         let rec = write_agent_files(
-            &sample_agent(), "raw", Tool::Cursor, home.path(), Some(proj.path()), "s", "b", "v", "t",
+            &sample_agent(), "raw", Tool::Cursor, home.path(), Some(proj.path()), None, "s", "b", "v", "t",
         )
         .await
         .unwrap();
         assert!(proj.path().join(".cursor/rules/frontend-developer.mdc").exists());
         assert_eq!(rec.project_path.as_deref(), Some(proj.path().to_string_lossy().as_ref()));
         assert_eq!(rec.scope, crate::types::Scope::Project);
+    }
+
+    /// Track records provenance but must NOT create or touch any file.
+    #[tokio::test]
+    async fn track_writes_no_file() {
+        let home = tempfile::tempdir().unwrap();
+        let agent = sample_agent();
+        let raw = "---\nname: Frontend Developer\n---\nBODY\n";
+
+        let rec = track_agent_record(
+            &agent, raw, Tool::Codex, home.path(), None, "src-1", "body-1", "v1",
+            "2026-06-06T00:00:00Z",
+        )
+        .unwrap();
+
+        let path = home.path().join(".codex/agents/frontend-developer.toml");
+        assert!(!path.exists(), "Track must not write the agent file");
+        assert_eq!(rec.dest, path.to_string_lossy(), "record points at the canonical dest");
+
+        // The recorded rendered_hash equals a real render — so if the user's file
+        // happens to match it, reconcile yields Current; otherwise Modified.
+        let (_b, render_hash) = render::render_with_hash(&agent, raw, Tool::Codex).unwrap();
+        assert_eq!(rec.rendered_hash, render_hash);
+        assert_eq!(
+            classify(Some(&render_hash), &rec.rendered_hash, &rec.source_hash, Some("src-1")),
+            InstallState::Current,
+            "a tracked file that matches the canonical render reconciles as Current"
+        );
+        assert_eq!(
+            classify(Some("hand-edited"), &rec.rendered_hash, &rec.source_hash, Some("src-1")),
+            InstallState::Modified,
+            "a tracked file that differs reconciles as Modified (never silently clobbered)"
+        );
+    }
+
+    /// A write that overwrites an existing, DIFFERENT file must preserve the old
+    /// bytes in the backups dir first; an identical (no-op) write must not.
+    #[tokio::test]
+    async fn write_backs_up_existing_differing_file() {
+        let home = tempfile::tempdir().unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let agent = sample_agent();
+        let dest = home.path().join(".codex/agents/frontend-developer.toml");
+
+        // Simulate a user-edited file already on disk at the dest.
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::write(&dest, b"USER EDITED CONTENT").unwrap();
+
+        // Update over it (with backups enabled).
+        write_agent_files(
+            &agent, "---\nname: Frontend Developer\n---\nNEW\n", Tool::Codex, home.path(),
+            None, Some(backups.path()), "src-2", "body-2", "v2", "2026-06-06T01:02:03Z",
+        )
+        .await
+        .unwrap();
+
+        // The old bytes were preserved before the overwrite.
+        let saved: Vec<_> = std::fs::read_dir(backups.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| std::fs::read(e.path()).unwrap())
+            .collect();
+        assert_eq!(saved.len(), 1, "exactly one backup created");
+        assert_eq!(saved[0], b"USER EDITED CONTENT", "backup holds the pre-overwrite bytes");
+
+        // A second, byte-identical write makes no new backup (not destructive).
+        let before = std::fs::read(&dest).unwrap();
+        write_agent_files(
+            &agent, "---\nname: Frontend Developer\n---\nNEW\n", Tool::Codex, home.path(),
+            None, Some(backups.path()), "src-2", "body-2", "v2", "2026-06-06T02:02:03Z",
+        )
+        .await
+        .unwrap();
+        let after = std::fs::read(&dest).unwrap();
+        assert_eq!(before, after, "identical render leaves the file unchanged");
+        let count = std::fs::read_dir(backups.path()).unwrap().count();
+        assert_eq!(count, 1, "no-op write adds no backup");
     }
 
     #[test]

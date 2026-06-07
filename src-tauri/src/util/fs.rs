@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use crate::error::BrewError;
+use crate::error::AppError;
 
 /// Write `bytes` atomically to `final_path`.
 ///
@@ -28,10 +28,10 @@ use crate::error::BrewError;
 /// atomicity.
 ///
 /// If `final_path`'s parent directory doesn't exist, this returns
-/// `BrewError::Io` rather than creating it — callers should `mkdir_p`
+/// `AppError::Io` rather than creating it — callers should `mkdir_p`
 /// explicitly so the parent's permissions are intentional.
-pub async fn atomic_write(final_path: &Path, bytes: &[u8]) -> Result<(), BrewError> {
-    let parent = final_path.parent().ok_or_else(|| BrewError::Io {
+pub async fn atomic_write(final_path: &Path, bytes: &[u8]) -> Result<(), AppError> {
+    let parent = final_path.parent().ok_or_else(|| AppError::Io {
         message: format!(
             "atomic_write: {} has no parent directory",
             final_path.display()
@@ -51,13 +51,13 @@ pub async fn atomic_write(final_path: &Path, bytes: &[u8]) -> Result<(), BrewErr
         use tokio::io::AsyncWriteExt;
         let mut file = tokio::fs::File::create(&tmp_path)
             .await
-            .map_err(|e| BrewError::Io {
+            .map_err(|e| AppError::Io {
                 message: format!("create {}: {}", tmp_path.display(), e),
             })?;
-        file.write_all(bytes).await.map_err(|e| BrewError::Io {
+        file.write_all(bytes).await.map_err(|e| AppError::Io {
             message: format!("write {}: {}", tmp_path.display(), e),
         })?;
-        file.sync_all().await.map_err(|e| BrewError::Io {
+        file.sync_all().await.map_err(|e| AppError::Io {
             message: format!("fsync {}: {}", tmp_path.display(), e),
         })?;
     }
@@ -65,7 +65,7 @@ pub async fn atomic_write(final_path: &Path, bytes: &[u8]) -> Result<(), BrewErr
     // Atomic rename.
     tokio::fs::rename(&tmp_path, final_path)
         .await
-        .map_err(|e| BrewError::Io {
+        .map_err(|e| AppError::Io {
             message: format!(
                 "rename {} -> {}: {}",
                 tmp_path.display(),
@@ -87,19 +87,19 @@ pub async fn atomic_write(final_path: &Path, bytes: &[u8]) -> Result<(), BrewErr
     Ok(())
 }
 
-/// Read at most `max_bytes` from `path`. Returns `BrewError::Io` if the
+/// Read at most `max_bytes` from `path`. Returns `AppError::Io` if the
 /// file's length exceeds the cap (does NOT silently truncate).
 ///
 /// Use this for any read of an attacker-influenced or user-data file
 /// where a deliberately oversize payload would cause OOM. The size check
 /// uses `metadata().len()` so the cap is enforced *before* allocation.
-pub async fn read_capped(path: &Path, max_bytes: u64) -> Result<Vec<u8>, BrewError> {
-    let meta = tokio::fs::metadata(path).await.map_err(|e| BrewError::Io {
+pub async fn read_capped(path: &Path, max_bytes: u64) -> Result<Vec<u8>, AppError> {
+    let meta = tokio::fs::metadata(path).await.map_err(|e| AppError::Io {
         message: format!("stat {}: {}", path.display(), e),
     })?;
     let size = meta.len();
     if size > max_bytes {
-        return Err(BrewError::Io {
+        return Err(AppError::Io {
             message: format!(
                 "{} is {} bytes, exceeds cap of {}",
                 path.display(),
@@ -108,7 +108,7 @@ pub async fn read_capped(path: &Path, max_bytes: u64) -> Result<Vec<u8>, BrewErr
             ),
         });
     }
-    tokio::fs::read(path).await.map_err(|e| BrewError::Io {
+    tokio::fs::read(path).await.map_err(|e| AppError::Io {
         message: format!("read {}: {}", path.display(), e),
     })
 }
@@ -187,7 +187,7 @@ mod tests {
 
         let r = read_capped(&path, 100).await;
         match r {
-            Err(BrewError::Io { message }) => {
+            Err(AppError::Io { message }) => {
                 assert!(
                     message.contains("exceeds cap"),
                     "expected cap-exceeded message, got {:?}",

@@ -217,6 +217,10 @@ pub fn parse_github_url(homepage: &str) -> Option<GithubRepo> {
 /// `github.com` exactly, scheme must be http/https, owner/repo must
 /// match the strict character set, no `..` segments, no query/fragment
 /// on the resulting canonical URL.
+///
+/// Wired by the catalog GitHub-status feature (parses a clone's `origin` remote
+/// → owner/repo). Tolerant variant of `parse_github_url`: accepts `.git`
+/// suffixes and trims trailing path segments from release/archive URLs.
 pub fn extract_github_repo(url: &str) -> Option<GithubRepo> {
     let url = url.trim();
     if url.is_empty() {
@@ -292,33 +296,6 @@ pub fn extract_github_repo(url: &str) -> Option<GithubRepo> {
 
     let canonical = format!("https://github.com/{owner}/{repo}");
     parse_github_url(&canonical)
-}
-
-/// Resolve a GitHub repo from a set of candidate URLs in priority order.
-/// Returns the canonical `https://github.com/<owner>/<repo>` string the
-/// rest of the system uses, suitable for passing to `parse_github_url`,
-/// `api_url`, or `cache_key`.
-///
-/// Used by the brew-info → `Package` conversion layer to widen GitHub
-/// detection beyond the upstream `homepage` field — formulae routinely
-/// have non-github homepages (project sites, docs) but GitHub-hosted
-/// `urls.stable.url` or `urls.head.url`. Same for casks pointing
-/// `homepage` at a marketing page but hosting the .pkg/.dmg on GitHub
-/// Releases.
-///
-/// Iteration order matches the upstream brew metadata's authoritativeness:
-/// homepage (most explicit "the project's GitHub home") wins over the
-/// less direct binary-URL fields.
-pub fn resolve_github_homepage<'a, I>(candidates: I) -> Option<String>
-where
-    I: IntoIterator<Item = Option<&'a str>>,
-{
-    for c in candidates.into_iter().flatten() {
-        if let Some(r) = extract_github_repo(c) {
-            return Some(format!("https://github.com/{}/{}", r.owner, r.repo));
-        }
-    }
-    None
 }
 
 /// Apply GitHub's owner/repo lexical rules. Per GitHub:
@@ -613,67 +590,4 @@ mod tests {
         assert!(extract_github_repo("ftp://github.com/foo/bar").is_none());
     }
 
-    // ---------- resolve_github_homepage: priority walk ----------
-
-    #[test]
-    fn resolve_picks_homepage_when_homepage_is_github() {
-        let out = resolve_github_homepage([
-            Some("https://github.com/owner/repo"),
-            Some("https://github.com/owner/other-repo/archive/refs/tags/v1.tar.gz"),
-        ]);
-        assert_eq!(out.as_deref(), Some("https://github.com/owner/repo"));
-    }
-
-    #[test]
-    fn resolve_falls_through_to_url_when_homepage_is_not_github() {
-        // Typical formula shape: marketing homepage + GitHub source URL.
-        let out = resolve_github_homepage([
-            Some("https://example.org"),
-            Some("https://github.com/foo/bar/archive/refs/tags/v1.2.3.tar.gz"),
-            None,
-        ]);
-        assert_eq!(out.as_deref(), Some("https://github.com/foo/bar"));
-    }
-
-    #[test]
-    fn resolve_walks_through_to_head_url_when_homepage_and_stable_skip() {
-        let out = resolve_github_homepage([
-            Some("https://example.org"),
-            None,
-            Some("https://github.com/foo/bar.git"),
-        ]);
-        assert_eq!(out.as_deref(), Some("https://github.com/foo/bar"));
-    }
-
-    #[test]
-    fn resolve_returns_none_when_no_candidate_matches() {
-        let out = resolve_github_homepage([
-            Some("https://example.org"),
-            Some("https://gitlab.com/foo/bar"),
-            None,
-        ]);
-        assert_eq!(out, None);
-    }
-
-    #[test]
-    fn resolve_skips_empty_and_whitespace_candidates() {
-        let out = resolve_github_homepage([
-            Some(""),
-            Some("   "),
-            Some("https://github.com/foo/bar"),
-        ]);
-        assert_eq!(out.as_deref(), Some("https://github.com/foo/bar"));
-    }
-
-    #[test]
-    fn resolve_emits_canonical_form_strict_parser_accepts() {
-        // The output must always be re-parseable by the strict parser.
-        let out = resolve_github_homepage([
-            Some("https://github.com/foo/bar/releases/download/v1/foo.dmg"),
-        ])
-        .expect("resolve");
-        let reparsed = parse_github_url(&out).expect("reparseable");
-        assert_eq!(reparsed.owner, "foo");
-        assert_eq!(reparsed.repo, "bar");
-    }
 }

@@ -21,7 +21,7 @@
 
 use tauri::State;
 
-use crate::error::BrewError;
+use crate::error::AppError;
 use crate::github::{
     self, actions, auth, fetch_repo_stats, parse_github_url, CreatedIssue, DeviceFlowStart,
     GithubRepo, GithubStatusDto, PollResult, PollResultDto, RepoStats, Token,
@@ -47,7 +47,7 @@ const SCOPE_NOTIFICATIONS: &str = "notifications";
 pub async fn github_repo_stats(
     homepage: String,
     state: State<'_, AppState>,
-) -> Result<Option<RepoStats>, BrewError> {
+) -> Result<Option<RepoStats>, AppError> {
     // 1. Settings opt-in gate. The `github_enabled` toggle defaults
     //    OFF; if the user hasn't flipped it we silently return None.
     //    No network. No URL parse. The frontend interprets None as
@@ -93,7 +93,7 @@ pub async fn github_repo_stats(
 // ---------- Auth status (12e) ----------
 
 #[tauri::command]
-pub async fn github_status(_state: State<'_, AppState>) -> Result<GithubStatusDto, BrewError> {
+pub async fn github_status(_state: State<'_, AppState>) -> Result<GithubStatusDto, AppError> {
     // Reads from Keychain only — no network call, so no
     // require_network gate. The Settings panel calls this on mount to
     // know whether to show "Sign in" vs "Signed in as @user".
@@ -105,7 +105,7 @@ pub async fn github_status(_state: State<'_, AppState>) -> Result<GithubStatusDt
 #[tauri::command]
 pub async fn github_signin_start(
     state: State<'_, AppState>,
-) -> Result<DeviceFlowStart, BrewError> {
+) -> Result<DeviceFlowStart, AppError> {
     // Sign-in itself is outbound — paranoid mode blocks even the OAuth
     // handshake. Per §12d this is by design: the user can't sign in if
     // they've told us not to make outbound calls.
@@ -119,7 +119,7 @@ pub async fn github_signin_start(
 pub async fn github_signin_poll(
     device_code: String,
     state: State<'_, AppState>,
-) -> Result<PollResultDto, BrewError> {
+) -> Result<PollResultDto, AppError> {
     state.require_network("github_signin").await?;
     let result: PollResult = auth::poll_device_flow(&device_code).await?;
     Ok(result.into())
@@ -128,7 +128,7 @@ pub async fn github_signin_poll(
 // ---------- Sign-out (12e) ----------
 
 #[tauri::command]
-pub async fn github_signout(_state: State<'_, AppState>) -> Result<(), BrewError> {
+pub async fn github_signout(_state: State<'_, AppState>) -> Result<(), AppError> {
     // Sign-out is purely a Keychain delete — no network. We don't
     // gate it on paranoid mode (it's a *reduction* of state, never
     // an outbound call).
@@ -145,10 +145,10 @@ pub async fn github_signout(_state: State<'_, AppState>) -> Result<(), BrewError
 //      gist./raw./suffix-confusables and anything that isn't exactly
 //      `github.com/<owner>/<repo>`). Mismatch → `InvalidArgument`.
 //   3. `auth::read_token()` — must return `Some(Token)` from the
-//      Keychain or we surface `BrewError::AuthRequired` (no network
+//      Keychain or we surface `AppError::AuthRequired` (no network
 //      attempt). The token never crosses the IPC boundary.
 //   4. `auth::read_scopes()` — must contain `public_repo` or we
-//      surface `BrewError::ScopeRequired { scope }` so the frontend
+//      surface `AppError::ScopeRequired { scope }` so the frontend
 //      can route the user to a re-grant flow.
 //   5. Call the matching `github::actions::*` function, which
 //      re-validates the repo defensively before sending.
@@ -168,7 +168,7 @@ async fn authed_gate(
     homepage: &str,
     feature: &'static str,
     required_scope: &str,
-) -> Result<(reqwest::Client, GithubRepo, Token), BrewError> {
+) -> Result<(reqwest::Client, GithubRepo, Token), AppError> {
     // 1. Paranoid-mode gate.
     state.require_network(feature).await?;
 
@@ -177,18 +177,18 @@ async fn authed_gate(
     //    we shouldn't get this far if the homepage wasn't already
     //    classified as a GitHub URL on the frontend; an unparseable
     //    homepage here is a real bug, not a "no stats" outcome.
-    let repo = parse_github_url(homepage).ok_or_else(|| BrewError::InvalidArgument {
+    let repo = parse_github_url(homepage).ok_or_else(|| AppError::InvalidArgument {
         message: format!("not a github.com/<owner>/<repo> URL: {homepage}"),
     })?;
 
     // 3. Auth gate.
-    let token = auth::read_token()?.ok_or(BrewError::AuthRequired)?;
+    let token = auth::read_token()?.ok_or(AppError::AuthRequired)?;
 
     // 4. Scope gate. The scope list is cached at sign-in and read from
     //    the Keychain — no extra GitHub round-trip required.
     let scopes = auth::read_scopes()?.unwrap_or_default();
     if !scopes.iter().any(|s| s == required_scope) {
-        return Err(BrewError::ScopeRequired {
+        return Err(AppError::ScopeRequired {
             scope: required_scope.to_string(),
         });
     }
@@ -204,7 +204,7 @@ async fn authed_gate(
 pub async fn github_star(
     homepage: String,
     state: State<'_, AppState>,
-) -> Result<(), BrewError> {
+) -> Result<(), AppError> {
     let (client, repo, token) =
         authed_gate(&state, &homepage, "github_star", SCOPE_PUBLIC_REPO).await?;
     actions::star(&client, &repo, &token).await
@@ -214,7 +214,7 @@ pub async fn github_star(
 pub async fn github_unstar(
     homepage: String,
     state: State<'_, AppState>,
-) -> Result<(), BrewError> {
+) -> Result<(), AppError> {
     let (client, repo, token) =
         authed_gate(&state, &homepage, "github_unstar", SCOPE_PUBLIC_REPO).await?;
     actions::unstar(&client, &repo, &token).await
@@ -224,7 +224,7 @@ pub async fn github_unstar(
 pub async fn github_is_starred(
     homepage: String,
     state: State<'_, AppState>,
-) -> Result<bool, BrewError> {
+) -> Result<bool, AppError> {
     let (client, repo, token) =
         authed_gate(&state, &homepage, "github_is_starred", SCOPE_PUBLIC_REPO).await?;
     actions::is_starred(&client, &repo, &token).await
@@ -234,7 +234,7 @@ pub async fn github_is_starred(
 pub async fn github_watch(
     homepage: String,
     state: State<'_, AppState>,
-) -> Result<(), BrewError> {
+) -> Result<(), AppError> {
     let (client, repo, token) =
         authed_gate(&state, &homepage, "github_watch", SCOPE_NOTIFICATIONS).await?;
     actions::watch(&client, &repo, &token).await
@@ -244,7 +244,7 @@ pub async fn github_watch(
 pub async fn github_unwatch(
     homepage: String,
     state: State<'_, AppState>,
-) -> Result<(), BrewError> {
+) -> Result<(), AppError> {
     let (client, repo, token) =
         authed_gate(&state, &homepage, "github_unwatch", SCOPE_NOTIFICATIONS).await?;
     actions::unwatch(&client, &repo, &token).await
@@ -257,7 +257,7 @@ pub async fn github_create_issue(
     body: String,
     labels: Vec<String>,
     state: State<'_, AppState>,
-) -> Result<CreatedIssue, BrewError> {
+) -> Result<CreatedIssue, AppError> {
     let (client, repo, token) =
         authed_gate(&state, &homepage, "github_create_issue", SCOPE_PUBLIC_REPO).await?;
     // Convert Vec<String> to &[&str] for the borrowed-slice API. The
@@ -324,7 +324,7 @@ mod tests {
         let state = build_state_with(SettingsLoadState::Loaded(s)).await;
         let result = inner_repo_stats(&state, "https://github.com/foo/bar".into()).await;
         match result {
-            Err(BrewError::ParanoidModeBlocked { feature }) => {
+            Err(AppError::ParanoidModeBlocked { feature }) => {
                 assert_eq!(feature, "github_repo_stats");
             }
             other => panic!("expected ParanoidModeBlocked, got {other:?}"),
@@ -356,7 +356,7 @@ mod tests {
         let state = build_state_with(SettingsLoadState::Loaded(s)).await;
         let r = inner_signin_start(&state).await;
         match r {
-            Err(BrewError::ParanoidModeBlocked { feature }) => {
+            Err(AppError::ParanoidModeBlocked { feature }) => {
                 assert_eq!(feature, "github_signin");
             }
             other => panic!("expected ParanoidModeBlocked, got {other:?}"),
@@ -372,7 +372,7 @@ mod tests {
         let state = build_state_with(SettingsLoadState::Loaded(s)).await;
         let r = inner_signin_poll(&state, "fake-device-code".into()).await;
         match r {
-            Err(BrewError::ParanoidModeBlocked { feature }) => {
+            Err(AppError::ParanoidModeBlocked { feature }) => {
                 assert_eq!(feature, "github_signin");
             }
             other => panic!("expected ParanoidModeBlocked, got {other:?}"),
@@ -403,7 +403,7 @@ mod tests {
     async fn inner_repo_stats(
         state: &AppState,
         homepage: String,
-    ) -> Result<Option<RepoStats>, BrewError> {
+    ) -> Result<Option<RepoStats>, AppError> {
         {
             let guard = state.settings.read().await;
             let enabled = match &*guard {
@@ -426,7 +426,7 @@ mod tests {
         fetch_repo_stats(&client, &repo, auth_token.as_ref(), &cache_dir).await
     }
 
-    async fn inner_signin_start(state: &AppState) -> Result<DeviceFlowStart, BrewError> {
+    async fn inner_signin_start(state: &AppState) -> Result<DeviceFlowStart, AppError> {
         state.require_network("github_signin").await?;
         auth::start_device_flow().await
     }
@@ -434,7 +434,7 @@ mod tests {
     async fn inner_signin_poll(
         state: &AppState,
         device_code: String,
-    ) -> Result<PollResultDto, BrewError> {
+    ) -> Result<PollResultDto, AppError> {
         state.require_network("github_signin").await?;
         let result: PollResult = auth::poll_device_flow(&device_code).await?;
         Ok(result.into())
@@ -470,17 +470,17 @@ mod tests {
     }
 
     impl KeychainSlot for MockKeychain {
-        fn read(&self, account: &str) -> Result<Option<String>, BrewError> {
+        fn read(&self, account: &str) -> Result<Option<String>, AppError> {
             Ok(self.entries.lock().unwrap().get(account).cloned())
         }
-        fn write(&self, account: &str, value: &str) -> Result<(), BrewError> {
+        fn write(&self, account: &str, value: &str) -> Result<(), AppError> {
             self.entries
                 .lock()
                 .unwrap()
                 .insert(account.to_string(), value.to_string());
             Ok(())
         }
-        fn delete(&self, account: &str) -> Result<(), BrewError> {
+        fn delete(&self, account: &str) -> Result<(), AppError> {
             self.entries.lock().unwrap().remove(account);
             Ok(())
         }
@@ -495,15 +495,15 @@ mod tests {
         feature: &'static str,
         required_scope: &str,
         kc: &dyn KeychainSlot,
-    ) -> Result<(GithubRepo, Token), BrewError> {
+    ) -> Result<(GithubRepo, Token), AppError> {
         state.require_network(feature).await?;
-        let repo = parse_github_url(homepage).ok_or_else(|| BrewError::InvalidArgument {
+        let repo = parse_github_url(homepage).ok_or_else(|| AppError::InvalidArgument {
             message: format!("not a github.com/<owner>/<repo> URL: {homepage}"),
         })?;
-        let token = auth::read_token_with(kc)?.ok_or(BrewError::AuthRequired)?;
+        let token = auth::read_token_with(kc)?.ok_or(AppError::AuthRequired)?;
         let scopes = auth::read_scopes_with(kc)?.unwrap_or_default();
         if !scopes.iter().any(|s| s == required_scope) {
-            return Err(BrewError::ScopeRequired {
+            return Err(AppError::ScopeRequired {
                 scope: required_scope.to_string(),
             });
         }
@@ -523,7 +523,7 @@ mod tests {
         let state = build_state_with(SettingsLoadState::Loaded(s)).await;
         let r = state.require_network(feature).await;
         match r {
-            Err(BrewError::ParanoidModeBlocked { feature: f }) => assert_eq!(f, feature),
+            Err(AppError::ParanoidModeBlocked { feature: f }) => assert_eq!(f, feature),
             other => panic!("expected ParanoidModeBlocked for {feature}, got {other:?}"),
         }
     }
@@ -569,7 +569,7 @@ mod tests {
         })
         .await;
         let r = state.require_network("github_create_issue").await;
-        assert!(matches!(r, Err(BrewError::ParanoidModeBlocked { .. })));
+        assert!(matches!(r, Err(AppError::ParanoidModeBlocked { .. })));
     }
 
     // ---------- Auth / Scope gates ----------
@@ -590,7 +590,7 @@ mod tests {
         )
         .await;
         match r {
-            Err(BrewError::AuthRequired) => {}
+            Err(AppError::AuthRequired) => {}
             other => panic!("expected AuthRequired, got {other:?}"),
         }
     }
@@ -610,7 +610,7 @@ mod tests {
         )
         .await;
         match r {
-            Err(BrewError::ScopeRequired { scope }) => assert_eq!(scope, "public_repo"),
+            Err(AppError::ScopeRequired { scope }) => assert_eq!(scope, "public_repo"),
             other => panic!("expected ScopeRequired(public_repo), got {other:?}"),
         }
     }
@@ -635,7 +635,7 @@ mod tests {
         )
         .await;
         match r {
-            Err(BrewError::ScopeRequired { scope }) => assert_eq!(scope, "notifications"),
+            Err(AppError::ScopeRequired { scope }) => assert_eq!(scope, "notifications"),
             other => panic!("expected ScopeRequired(notifications), got {other:?}"),
         }
     }
@@ -699,7 +699,7 @@ mod tests {
         )
         .await;
         match r {
-            Err(BrewError::InvalidArgument { message }) => {
+            Err(AppError::InvalidArgument { message }) => {
                 assert!(message.contains("github.com"), "{message}");
             }
             other => panic!("expected InvalidArgument, got {other:?}"),
@@ -727,7 +727,7 @@ mod tests {
         )
         .await;
         match r {
-            Err(BrewError::ParanoidModeBlocked { feature }) => {
+            Err(AppError::ParanoidModeBlocked { feature }) => {
                 assert_eq!(feature, "github_star")
             }
             other => panic!("expected ParanoidModeBlocked, got {other:?}"),

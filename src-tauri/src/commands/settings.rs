@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::error::BrewError;
+use crate::error::AppError;
 use crate::state::AppState;
 use crate::util::fs::{atomic_write, read_capped};
 
@@ -485,13 +485,13 @@ async fn load_async(app_data_dir: &Path) -> SettingsLoadState {
 /// to bytes, (3) reject if the byte length exceeds the cap, (4)
 /// `atomic_write` into place, (5) return the clamped struct so callers
 /// can re-broadcast the canonicalized values.
-pub(crate) async fn persist(app_data_dir: &Path, mut settings: Settings) -> Result<Settings, BrewError> {
+pub(crate) async fn persist(app_data_dir: &Path, mut settings: Settings) -> Result<Settings, AppError> {
     settings.clamp();
-    let bytes = serde_json::to_vec_pretty(&settings).map_err(|e| BrewError::Internal {
+    let bytes = serde_json::to_vec_pretty(&settings).map_err(|e| AppError::Internal {
         message: format!("serialize settings: {e}"),
     })?;
     if bytes.len() as u64 > MAX_SETTINGS_BYTES {
-        return Err(BrewError::InvalidArgument {
+        return Err(AppError::InvalidArgument {
             message: format!(
                 "serialized settings are {} bytes, exceeds {}-byte cap",
                 bytes.len(),
@@ -505,7 +505,7 @@ pub(crate) async fn persist(app_data_dir: &Path, mut settings: Settings) -> Resu
     // that's never run brew-browser could plausibly hit this otherwise.
     if !app_data_dir.exists() {
         tokio::fs::create_dir_all(app_data_dir).await.map_err(|e| {
-            BrewError::Io {
+            AppError::Io {
                 message: format!(
                     "create settings parent {}: {e}",
                     app_data_dir.display()
@@ -531,12 +531,12 @@ pub(crate) async fn persist(app_data_dir: &Path, mut settings: Settings) -> Resu
 /// can surface a "Settings file unreadable — reset to defaults?" prompt
 /// without exposing the corrupt JSON contents.
 #[tauri::command]
-pub async fn settings_get(state: State<'_, AppState>) -> Result<Settings, BrewError> {
+pub async fn settings_get(state: State<'_, AppState>) -> Result<Settings, AppError> {
     let guard = state.settings.read().await;
     match &*guard {
         SettingsLoadState::Loaded(s) => Ok(s.clone()),
         SettingsLoadState::FirstLaunch => Ok(Settings::default()),
-        SettingsLoadState::Corrupt { message } => Err(BrewError::Internal {
+        SettingsLoadState::Corrupt { message } => Err(AppError::Internal {
             message: format!("settings file is unreadable: {message}"),
         }),
     }
@@ -549,7 +549,7 @@ pub async fn settings_get(state: State<'_, AppState>) -> Result<Settings, BrewEr
 pub async fn settings_set(
     settings: Settings,
     state: State<'_, AppState>,
-) -> Result<Settings, BrewError> {
+) -> Result<Settings, AppError> {
     let clamped = persist(&state.app_data_dir, settings).await?;
     {
         let mut guard = state.settings.write().await;
@@ -562,7 +562,7 @@ pub async fn settings_set(
 /// in-memory cache. Used by the UI's "Reset to defaults" button when
 /// the file is corrupt or the user just wants to start fresh.
 #[tauri::command]
-pub async fn settings_reset(state: State<'_, AppState>) -> Result<Settings, BrewError> {
+pub async fn settings_reset(state: State<'_, AppState>) -> Result<Settings, AppError> {
     let defaults = Settings::default();
     let clamped = persist(&state.app_data_dir, defaults).await?;
     {

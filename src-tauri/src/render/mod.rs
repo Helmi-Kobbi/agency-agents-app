@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::error::BrewError;
+use crate::error::AppError;
 use crate::types::{Agent, Scope, Tool};
 
 impl Tool {
@@ -28,21 +28,6 @@ impl Tool {
             Tool::Cursor | Tool::Opencode | Tool::Windsurf | Tool::Aider => Scope::Project,
             _ => Scope::User,
         }
-    }
-
-    /// Whether Phase 2 can render+install this tool. The unsupported four are
-    /// multi-file / accumulated shapes deferred to a later phase.
-    pub fn supported(self) -> bool {
-        matches!(
-            self,
-            Tool::ClaudeCode
-                | Tool::Copilot
-                | Tool::Cursor
-                | Tool::Codex
-                | Tool::GeminiCli
-                | Tool::Opencode
-                | Tool::Qwen
-        )
     }
 
     /// kebab id, matching `scripts/install.sh` tool names.
@@ -92,8 +77,8 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     s
 }
 
-fn unsupported(tool: Tool) -> BrewError {
-    BrewError::Io {
+fn unsupported(tool: Tool) -> AppError {
+    AppError::Io {
         message: format!(
             "tool '{}' is not supported for install yet (multi-file format)",
             tool.id()
@@ -103,7 +88,7 @@ fn unsupported(tool: Tool) -> BrewError {
 
 /// Render the file content for `tool` from `agent` (+ the raw corpus `.md`
 /// source, used verbatim by identity tools). Deterministic.
-pub fn render(agent: &Agent, raw_source: &str, tool: Tool) -> Result<String, BrewError> {
+pub fn render(agent: &Agent, raw_source: &str, tool: Tool) -> Result<String, AppError> {
     let body = agent.body.as_str();
     let out = match tool {
         // Identity — ship the corpus `.md` exactly as authored.
@@ -157,7 +142,7 @@ pub fn render_with_hash(
     agent: &Agent,
     raw_source: &str,
     tool: Tool,
-) -> Result<(String, String), BrewError> {
+) -> Result<(String, String), AppError> {
     let bytes = render(agent, raw_source, tool)?;
     let hash = sha256_hex(bytes.as_bytes());
     Ok((bytes, hash))
@@ -173,9 +158,9 @@ pub fn dests(
     slug: &str,
     home: &Path,
     project_root: Option<&Path>,
-) -> Result<Vec<PathBuf>, BrewError> {
-    let proj = || -> Result<&Path, BrewError> {
-        project_root.ok_or_else(|| BrewError::Io {
+) -> Result<Vec<PathBuf>, AppError> {
+    let proj = || -> Result<&Path, AppError> {
+        project_root.ok_or_else(|| AppError::Io {
             message: format!("tool '{}' is project-scoped; a project path is required", tool.id()),
         })
     };

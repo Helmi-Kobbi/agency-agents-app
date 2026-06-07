@@ -11,7 +11,7 @@
 //! ## Rate limit handling
 //!
 //! GitHub returns `X-RateLimit-Remaining` on every response. On a
-//! 403 with remaining == 0, we surface `BrewError::GithubRateLimited`
+//! 403 with remaining == 0, we surface `AppError::GithubRateLimited`
 //! with the `reset_at` unix timestamp. **No retry. No exponential
 //! backoff.** The user is supposed to see the limit and either wait or
 //! sign in.
@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::BrewError;
+use crate::error::AppError;
 use crate::github::auth::Token;
 use crate::github::url::GithubRepo;
 use crate::util::fs::{atomic_write, read_capped};
@@ -142,7 +142,7 @@ pub async fn fetch_repo_stats(
     repo: &GithubRepo,
     auth_token: Option<&Token>,
     cache_dir: &Path,
-) -> Result<Option<RepoStats>, BrewError> {
+) -> Result<Option<RepoStats>, AppError> {
     // Cache hit?
     let cache_path = cache_path_for(cache_dir, repo);
     if let Some(cached) = read_fresh_cache(&cache_path).await? {
@@ -159,7 +159,7 @@ pub async fn fetch_repo_stats(
         404 => return Ok(None),
         403 => return Err(maybe_rate_limited(&resp, &url)),
         s => {
-            return Err(BrewError::HttpStatus {
+            return Err(AppError::HttpStatus {
                 url: url.clone(),
                 status: s,
             });
@@ -169,18 +169,18 @@ pub async fn fetch_repo_stats(
     // Body cap — refuse oversize before we deserialize.
     if let Some(len) = resp.content_length() {
         if len > MAX_RESPONSE_BYTES {
-            return Err(BrewError::Network {
+            return Err(AppError::Network {
                 url,
                 message: format!("body length {len} exceeds {MAX_RESPONSE_BYTES}"),
             });
         }
     }
-    let bytes = resp.bytes().await.map_err(|e| BrewError::Network {
+    let bytes = resp.bytes().await.map_err(|e| AppError::Network {
         url: url.clone(),
         message: format!("body: {e}"),
     })?;
     if (bytes.len() as u64) > MAX_RESPONSE_BYTES {
-        return Err(BrewError::Network {
+        return Err(AppError::Network {
             url,
             message: format!(
                 "body length {} exceeds {MAX_RESPONSE_BYTES}",
@@ -189,7 +189,7 @@ pub async fn fetch_repo_stats(
         });
     }
 
-    let raw: RawRepo = serde_json::from_slice(&bytes).map_err(|e| BrewError::JsonParse {
+    let raw: RawRepo = serde_json::from_slice(&bytes).map_err(|e| AppError::JsonParse {
         command: url.clone(),
         message: e.to_string(),
         raw_excerpt: String::from_utf8_lossy(&bytes[..bytes.len().min(256)])
@@ -278,7 +278,7 @@ async fn send_with_optional_auth(
     client: &reqwest::Client,
     url: &str,
     auth_token: Option<&Token>,
-) -> Result<reqwest::Response, BrewError> {
+) -> Result<reqwest::Response, AppError> {
     let mut req = client
         .get(url)
         .header("Accept", "application/vnd.github+json")
@@ -290,7 +290,7 @@ async fn send_with_optional_auth(
         // the chokepoint.
         req = req.header("Authorization", format!("Bearer {}", t.as_str()));
     }
-    req.send().await.map_err(|e| BrewError::Network {
+    req.send().await.map_err(|e| AppError::Network {
         url: url.to_string(),
         message: e.to_string(),
     })
@@ -298,7 +298,7 @@ async fn send_with_optional_auth(
 
 /// Inspect rate-limit headers on a 403 response and build the
 /// appropriate typed error.
-fn maybe_rate_limited(resp: &reqwest::Response, url: &str) -> BrewError {
+fn maybe_rate_limited(resp: &reqwest::Response, url: &str) -> AppError {
     let remaining = resp
         .headers()
         .get("x-ratelimit-remaining")
@@ -312,9 +312,9 @@ fn maybe_rate_limited(resp: &reqwest::Response, url: &str) -> BrewError {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(0);
-        BrewError::GithubRateLimited { reset_at }
+        AppError::GithubRateLimited { reset_at }
     } else {
-        BrewError::HttpStatus {
+        AppError::HttpStatus {
             url: url.to_string(),
             status: 403,
         }
@@ -322,12 +322,12 @@ fn maybe_rate_limited(resp: &reqwest::Response, url: &str) -> BrewError {
 }
 
 /// Construct a reqwest client tuned for github.com.
-pub fn build_client() -> Result<reqwest::Client, BrewError> {
+pub fn build_client() -> Result<reqwest::Client, AppError> {
     reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .user_agent(USER_AGENT)
         .build()
-        .map_err(|e| BrewError::Network {
+        .map_err(|e| AppError::Network {
             url: API_BASE.into(),
             message: format!("client build: {e}"),
         })
@@ -341,12 +341,12 @@ fn cache_path_for(cache_dir: &Path, repo: &GithubRepo) -> PathBuf {
     cache_dir.join(format!("{}.json", repo.cache_key()))
 }
 
-async fn read_fresh_cache(path: &Path) -> Result<Option<RepoStats>, BrewError> {
+async fn read_fresh_cache(path: &Path) -> Result<Option<RepoStats>, AppError> {
     let meta = match tokio::fs::metadata(path).await {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {
-            return Err(BrewError::Io {
+            return Err(AppError::Io {
                 message: format!("stat {}: {e}", path.display()),
             })
         }
@@ -375,19 +375,19 @@ async fn read_fresh_cache(path: &Path) -> Result<Option<RepoStats>, BrewError> {
     }
 }
 
-async fn write_cache(path: &Path, stats: &RepoStats) -> Result<(), BrewError> {
+async fn write_cache(path: &Path, stats: &RepoStats) -> Result<(), AppError> {
     if let Some(parent) = path.parent() {
         if !parent.exists() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| BrewError::Io {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| AppError::Io {
                 message: format!("create {}: {e}", parent.display()),
             })?;
         }
     }
-    let bytes = serde_json::to_vec(stats).map_err(|e| BrewError::Internal {
+    let bytes = serde_json::to_vec(stats).map_err(|e| AppError::Internal {
         message: format!("serialize stats: {e}"),
     })?;
     if (bytes.len() as u64) > MAX_RESPONSE_BYTES {
-        return Err(BrewError::Internal {
+        return Err(AppError::Internal {
             message: format!("serialized stats {} exceeds cap", bytes.len()),
         });
     }
@@ -496,7 +496,7 @@ mod tests {
         // we can't easily fabricate a `reqwest::Response` in a unit test
         // without an HTTP server, so the test focuses on the *error
         // shape* by serializing the variant we'd produce.
-        let err = BrewError::GithubRateLimited {
+        let err = AppError::GithubRateLimited {
             reset_at: 1_700_000_000,
         };
         let v = serde_json::to_value(&err).unwrap();

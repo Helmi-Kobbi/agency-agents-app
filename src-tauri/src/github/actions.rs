@@ -14,7 +14,7 @@
 //!    immediately.
 //! 3. Honours GitHub's rate-limit response (`403` with
 //!    `X-RateLimit-Remaining: 0`) by surfacing
-//!    `BrewError::GithubRateLimited { reset_at }`. **No retry. No
+//!    `AppError::GithubRateLimited { reset_at }`. **No retry. No
 //!    exponential backoff.** Per the §12f review.
 //! 4. Caps every response body at [`MAX_RESPONSE_BYTES`] (256 KiB)
 //!    via `Response::content_length()` + a defensive post-read check.
@@ -23,7 +23,7 @@
 //!
 //! | endpoint                                | success | notes |
 //! |-----------------------------------------|---------|-------|
-//! | `PUT /user/starred/{owner}/{repo}`      | 204     | repo 404 → `BrewError::HttpStatus { status: 404, .. }` |
+//! | `PUT /user/starred/{owner}/{repo}`      | 204     | repo 404 → `AppError::HttpStatus { status: 404, .. }` |
 //! | `DELETE /user/starred/{owner}/{repo}`   | 204     | idempotent |
 //! | `GET /user/starred/{owner}/{repo}`      | 204=yes 404=no | any other status → error |
 //! | `PUT /repos/{o}/{r}/subscription`       | 200     | body `{subscribed:true,ignored:false}` |
@@ -49,7 +49,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::BrewError;
+use crate::error::AppError;
 use crate::github::auth::Token;
 use crate::github::url::GithubRepo;
 
@@ -121,7 +121,7 @@ pub async fn star(
     client: &reqwest::Client,
     repo: &GithubRepo,
     token: &Token,
-) -> Result<(), BrewError> {
+) -> Result<(), AppError> {
     revalidate_repo(repo)?;
     let url = format!("{}/user/starred/{}/{}", API_BASE, repo.owner, repo.repo);
     let resp = send(client.put(&url), token).await?;
@@ -130,7 +130,7 @@ pub async fn star(
         // outcome the caller wanted.
         204 => Ok(()),
         403 => Err(maybe_rate_limited(&resp, &url)),
-        s => Err(BrewError::HttpStatus { url, status: s }),
+        s => Err(AppError::HttpStatus { url, status: s }),
     }
 }
 
@@ -140,14 +140,14 @@ pub async fn unstar(
     client: &reqwest::Client,
     repo: &GithubRepo,
     token: &Token,
-) -> Result<(), BrewError> {
+) -> Result<(), AppError> {
     revalidate_repo(repo)?;
     let url = format!("{}/user/starred/{}/{}", API_BASE, repo.owner, repo.repo);
     let resp = send(client.delete(&url), token).await?;
     match resp.status().as_u16() {
         204 => Ok(()),
         403 => Err(maybe_rate_limited(&resp, &url)),
-        s => Err(BrewError::HttpStatus { url, status: s }),
+        s => Err(AppError::HttpStatus { url, status: s }),
     }
 }
 
@@ -158,7 +158,7 @@ pub async fn is_starred(
     client: &reqwest::Client,
     repo: &GithubRepo,
     token: &Token,
-) -> Result<bool, BrewError> {
+) -> Result<bool, AppError> {
     revalidate_repo(repo)?;
     let url = format!("{}/user/starred/{}/{}", API_BASE, repo.owner, repo.repo);
     let resp = send(client.get(&url), token).await?;
@@ -166,7 +166,7 @@ pub async fn is_starred(
         204 => Ok(true),
         404 => Ok(false),
         403 => Err(maybe_rate_limited(&resp, &url)),
-        s => Err(BrewError::HttpStatus { url, status: s }),
+        s => Err(AppError::HttpStatus { url, status: s }),
     }
 }
 
@@ -178,7 +178,7 @@ pub async fn watch(
     client: &reqwest::Client,
     repo: &GithubRepo,
     token: &Token,
-) -> Result<(), BrewError> {
+) -> Result<(), AppError> {
     revalidate_repo(repo)?;
     let url = format!("{}/repos/{}/{}/subscription", API_BASE, repo.owner, repo.repo);
     let body = serde_json::json!({ "subscribed": true, "ignored": false });
@@ -191,7 +191,7 @@ pub async fn watch(
     // we read at MAX_RESPONSE_BYTES via content_length pre-check.
     if let Some(len) = resp.content_length() {
         if len > MAX_RESPONSE_BYTES {
-            return Err(BrewError::Network {
+            return Err(AppError::Network {
                 url,
                 message: format!("watch body length {len} exceeds {MAX_RESPONSE_BYTES}"),
             });
@@ -200,7 +200,7 @@ pub async fn watch(
     let _ = resp.bytes().await;
     match status {
         200 => Ok(()),
-        s => Err(BrewError::HttpStatus { url, status: s }),
+        s => Err(AppError::HttpStatus { url, status: s }),
     }
 }
 
@@ -210,14 +210,14 @@ pub async fn unwatch(
     client: &reqwest::Client,
     repo: &GithubRepo,
     token: &Token,
-) -> Result<(), BrewError> {
+) -> Result<(), AppError> {
     revalidate_repo(repo)?;
     let url = format!("{}/repos/{}/{}/subscription", API_BASE, repo.owner, repo.repo);
     let resp = send(client.delete(&url), token).await?;
     match resp.status().as_u16() {
         204 => Ok(()),
         403 => Err(maybe_rate_limited(&resp, &url)),
-        s => Err(BrewError::HttpStatus { url, status: s }),
+        s => Err(AppError::HttpStatus { url, status: s }),
     }
 }
 
@@ -236,7 +236,7 @@ pub async fn create_issue(
     title: &str,
     body: &str,
     labels: &[&str],
-) -> Result<CreatedIssue, BrewError> {
+) -> Result<CreatedIssue, AppError> {
     revalidate_repo(repo)?;
     let sanitised_title = sanitise_title(title)?;
     let sanitised_body = sanitise_body(body)?;
@@ -254,25 +254,25 @@ pub async fn create_issue(
         return Err(maybe_rate_limited(&resp, &url));
     }
     if status != 201 {
-        return Err(BrewError::HttpStatus { url, status });
+        return Err(AppError::HttpStatus { url, status });
     }
 
     // Body cap — refuse oversize before deserialising. The successful
     // shape is bounded (~2-4 KiB typical) so 256 KiB is generous.
     if let Some(len) = resp.content_length() {
         if len > MAX_RESPONSE_BYTES {
-            return Err(BrewError::Network {
+            return Err(AppError::Network {
                 url,
                 message: format!("create_issue body length {len} exceeds {MAX_RESPONSE_BYTES}"),
             });
         }
     }
-    let bytes = resp.bytes().await.map_err(|e| BrewError::Network {
+    let bytes = resp.bytes().await.map_err(|e| AppError::Network {
         url: url.clone(),
         message: format!("body: {e}"),
     })?;
     if (bytes.len() as u64) > MAX_RESPONSE_BYTES {
-        return Err(BrewError::Network {
+        return Err(AppError::Network {
             url,
             message: format!(
                 "create_issue body length {} exceeds {MAX_RESPONSE_BYTES}",
@@ -281,13 +281,13 @@ pub async fn create_issue(
         });
     }
 
-    let raw: RawCreatedIssue = serde_json::from_slice(&bytes).map_err(|e| BrewError::JsonParse {
+    let raw: RawCreatedIssue = serde_json::from_slice(&bytes).map_err(|e| AppError::JsonParse {
         command: url.clone(),
         message: e.to_string(),
         raw_excerpt: String::from_utf8_lossy(&bytes[..bytes.len().min(256)]).into_owned(),
     })?;
     if raw.number == 0 || raw.html_url.is_empty() {
-        return Err(BrewError::Internal {
+        return Err(AppError::Internal {
             message: "github create_issue returned no number/html_url".into(),
         });
     }
@@ -302,12 +302,12 @@ pub async fn create_issue(
 /// Construct a reqwest client tuned for github.com actions. Mirrors
 /// `stats::build_client` so all GitHub traffic uses the same UA and
 /// timeout.
-pub fn build_client() -> Result<reqwest::Client, BrewError> {
+pub fn build_client() -> Result<reqwest::Client, AppError> {
     reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .user_agent(USER_AGENT)
         .build()
-        .map_err(|e| BrewError::Network {
+        .map_err(|e| AppError::Network {
             url: API_BASE.into(),
             message: format!("client build: {e}"),
         })
@@ -318,7 +318,7 @@ pub fn build_client() -> Result<reqwest::Client, BrewError> {
 async fn send(
     builder: reqwest::RequestBuilder,
     token: &Token,
-) -> Result<reqwest::Response, BrewError> {
+) -> Result<reqwest::Response, AppError> {
     builder
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
@@ -328,7 +328,7 @@ async fn send(
         .header("Authorization", format!("Bearer {}", token.as_str()))
         .send()
         .await
-        .map_err(|e| BrewError::Network {
+        .map_err(|e| AppError::Network {
             url: e
                 .url()
                 .map(|u| u.as_str().to_string())
@@ -339,9 +339,9 @@ async fn send(
 
 /// Defense-in-depth re-validation of an already-validated `GithubRepo`.
 /// Catches accidental hand-construction with bad characters.
-fn revalidate_repo(repo: &GithubRepo) -> Result<(), BrewError> {
+fn revalidate_repo(repo: &GithubRepo) -> Result<(), AppError> {
     if !is_valid_owner_or_repo(&repo.owner) || !is_valid_owner_or_repo(&repo.repo) {
-        return Err(BrewError::InvalidArgument {
+        return Err(AppError::InvalidArgument {
             message: format!(
                 "github repo failed re-validation: {}/{}",
                 repo.owner, repo.repo
@@ -378,7 +378,7 @@ fn is_valid_owner_or_repo(name: &str) -> bool {
 
 /// Inspect rate-limit headers on a 403 response and build the
 /// appropriate typed error. Mirrors `stats::maybe_rate_limited`.
-fn maybe_rate_limited(resp: &reqwest::Response, url: &str) -> BrewError {
+fn maybe_rate_limited(resp: &reqwest::Response, url: &str) -> AppError {
     let remaining = resp
         .headers()
         .get("x-ratelimit-remaining")
@@ -392,9 +392,9 @@ fn maybe_rate_limited(resp: &reqwest::Response, url: &str) -> BrewError {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(0);
-        BrewError::GithubRateLimited { reset_at }
+        AppError::GithubRateLimited { reset_at }
     } else {
-        BrewError::HttpStatus {
+        AppError::HttpStatus {
             url: url.to_string(),
             status: 403,
         }
@@ -407,7 +407,7 @@ fn maybe_rate_limited(resp: &reqwest::Response, url: &str) -> BrewError {
 ///
 /// Trims leading/trailing whitespace after stripping because a title
 /// of `"   "` should be rejected the same as `""`.
-fn sanitise_title(raw: &str) -> Result<String, BrewError> {
+fn sanitise_title(raw: &str) -> Result<String, AppError> {
     let cleaned: String = raw
         .chars()
         .filter(|c| {
@@ -418,12 +418,12 @@ fn sanitise_title(raw: &str) -> Result<String, BrewError> {
         .collect();
     let trimmed = cleaned.trim();
     if trimmed.is_empty() {
-        return Err(BrewError::InvalidArgument {
+        return Err(AppError::InvalidArgument {
             message: "issue title must not be empty".into(),
         });
     }
     if trimmed.chars().count() > ISSUE_TITLE_MAX_CHARS {
-        return Err(BrewError::InvalidArgument {
+        return Err(AppError::InvalidArgument {
             message: format!("issue title exceeds {ISSUE_TITLE_MAX_CHARS}-char cap"),
         });
     }
@@ -432,10 +432,10 @@ fn sanitise_title(raw: &str) -> Result<String, BrewError> {
 
 /// Strip null bytes only and enforce the body cap. Markdown
 /// passthrough; GitHub renders the body.
-fn sanitise_body(raw: &str) -> Result<String, BrewError> {
+fn sanitise_body(raw: &str) -> Result<String, AppError> {
     let cleaned: String = raw.chars().filter(|c| *c != '\0').collect();
     if cleaned.len() > ISSUE_BODY_MAX_BYTES {
-        return Err(BrewError::InvalidArgument {
+        return Err(AppError::InvalidArgument {
             message: format!(
                 "issue body exceeds {ISSUE_BODY_MAX_BYTES}-byte cap"
             ),
@@ -446,9 +446,9 @@ fn sanitise_body(raw: &str) -> Result<String, BrewError> {
 
 /// Validate the labels array and return owned strings the JSON
 /// encoder can consume directly.
-fn sanitise_labels(raw: &[&str]) -> Result<Vec<String>, BrewError> {
+fn sanitise_labels(raw: &[&str]) -> Result<Vec<String>, AppError> {
     if raw.len() > ISSUE_LABELS_MAX_COUNT {
-        return Err(BrewError::InvalidArgument {
+        return Err(AppError::InvalidArgument {
             message: format!(
                 "too many labels ({} > {ISSUE_LABELS_MAX_COUNT})",
                 raw.len()
@@ -458,7 +458,7 @@ fn sanitise_labels(raw: &[&str]) -> Result<Vec<String>, BrewError> {
     let mut out = Vec::with_capacity(raw.len());
     for label in raw {
         if label.is_empty() || label.len() > ISSUE_LABEL_MAX_CHARS {
-            return Err(BrewError::InvalidArgument {
+            return Err(AppError::InvalidArgument {
                 message: format!(
                     "label length must be 1..={ISSUE_LABEL_MAX_CHARS}; got {}",
                     label.len()
@@ -469,7 +469,7 @@ fn sanitise_labels(raw: &[&str]) -> Result<Vec<String>, BrewError> {
             let ok =
                 b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'/';
             if !ok {
-                return Err(BrewError::InvalidArgument {
+                return Err(AppError::InvalidArgument {
                     message: format!("label contains invalid character: {label:?}"),
                 });
             }
@@ -507,7 +507,7 @@ mod tests {
             repo: "bar".into(),
         };
         match revalidate_repo(&r) {
-            Err(BrewError::InvalidArgument { .. }) => {}
+            Err(AppError::InvalidArgument { .. }) => {}
             other => panic!("expected InvalidArgument, got {other:?}"),
         }
     }
@@ -585,7 +585,7 @@ mod tests {
     fn sanitise_title_rejects_over_256_chars() {
         let raw = "a".repeat(ISSUE_TITLE_MAX_CHARS + 1);
         match sanitise_title(&raw) {
-            Err(BrewError::InvalidArgument { message }) => {
+            Err(AppError::InvalidArgument { message }) => {
                 assert!(message.contains("256"), "{message}");
             }
             other => panic!("expected InvalidArgument, got {other:?}"),
@@ -613,7 +613,7 @@ mod tests {
         // 64 KiB + 1.
         let raw = "a".repeat(ISSUE_BODY_MAX_BYTES + 1);
         match sanitise_body(&raw) {
-            Err(BrewError::InvalidArgument { message }) => {
+            Err(AppError::InvalidArgument { message }) => {
                 // The byte count (65536) appears in the cap message.
                 assert!(
                     message.contains(&ISSUE_BODY_MAX_BYTES.to_string()),
@@ -646,7 +646,7 @@ mod tests {
             .map(|_| "bug")
             .collect();
         match sanitise_labels(&labels) {
-            Err(BrewError::InvalidArgument { message }) => {
+            Err(AppError::InvalidArgument { message }) => {
                 assert!(message.contains("too many"), "{message}");
             }
             other => panic!("expected InvalidArgument, got {other:?}"),
@@ -706,7 +706,7 @@ mod tests {
     /// emit on a 403 with `X-RateLimit-Remaining: 0`.
     #[test]
     fn rate_limit_error_serializes_with_camel_case_reset_at() {
-        let err = BrewError::GithubRateLimited {
+        let err = AppError::GithubRateLimited {
             reset_at: 1_700_000_000,
         };
         let v = serde_json::to_value(&err).unwrap();

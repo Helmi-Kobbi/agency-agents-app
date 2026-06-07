@@ -6,7 +6,6 @@
     "engineering": { "label": "Engineering", "icon": "Code" },
     "finance": { "label": "Finance", "icon": "DollarSign" },
     "game-development": { "label": "Game Development", "icon": "Gamepad2" },
-    "integrations": { "label": "Integrations", "icon": "Plug" },
     "marketing": { "label": "Marketing", "icon": "Megaphone" },
     "paid-media": { "label": "Paid Media", "icon": "Target" },
     "product": { "label": "Product", "icon": "Box" },
@@ -15,6 +14,7 @@
     "security": { "label": "Security", "icon": "ShieldCheck" },
     "spatial-computing": { "label": "Spatial Computing", "icon": "Boxes" },
     "specialized": { "label": "Specialized", "icon": "Sparkles" },
+    "strategy": { "label": "Strategy", "icon": "Network" },
     "support": { "label": "Support", "icon": "LifeBuoy" },
     "testing": { "label": "Testing", "icon": "FlaskConical" }
   }

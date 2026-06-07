@@ -13,7 +13,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::commands::settings::{self, SettingsLoadState};
 use crate::commands::updater::UpdaterState;
-use crate::error::BrewError;
+use crate::error::AppError;
 
 /// Shared application state. Registered via `Builder::manage()`.
 pub struct AppState {
@@ -55,10 +55,10 @@ impl AppState {
     /// Build the state at startup. Resolves the app-data directory and
     /// loads persisted settings; the corpus and updater caches start
     /// empty and hydrate lazily on first use.
-    pub fn build() -> Result<Self, BrewError> {
+    pub fn build() -> Result<Self, AppError> {
         let app_data_dir = resolve_app_data_dir()?;
         if !app_data_dir.exists() {
-            std::fs::create_dir_all(&app_data_dir).map_err(|e| BrewError::Io {
+            std::fs::create_dir_all(&app_data_dir).map_err(|e| AppError::Io {
                 message: format!(
                     "could not create app data dir {}: {}",
                     app_data_dir.display(),
@@ -88,7 +88,7 @@ impl AppState {
     }
 
     /// Consult paranoid mode + settings load state. Returns `Ok(())` if
-    /// the outbound call is allowed, or `BrewError::ParanoidModeBlocked`
+    /// the outbound call is allowed, or `AppError::ParanoidModeBlocked`
     /// otherwise. **Every outbound command must call this as its first
     /// line** — see the security review §12d "Cross-cutting concerns".
     ///
@@ -100,96 +100,16 @@ impl AppState {
     ///   deny. Corrupt is a deliberate fail-closed: we don't know what
     ///   the user wanted, so we don't make outbound calls until they
     ///   repair the file (or hit Reset to defaults in the UI).
-    pub async fn require_network(&self, feature: &'static str) -> Result<(), BrewError> {
+    pub async fn require_network(&self, feature: &'static str) -> Result<(), AppError> {
         let guard = self.settings.read().await;
         match &*guard {
             SettingsLoadState::Loaded(s) if !s.paranoid_mode => Ok(()),
             SettingsLoadState::FirstLaunch => Ok(()),
             SettingsLoadState::Loaded(_) | SettingsLoadState::Corrupt { .. } => {
-                Err(BrewError::ParanoidModeBlocked {
+                Err(AppError::ParanoidModeBlocked {
                     feature: feature.to_string(),
                 })
             }
-        }
-    }
-
-    /// v0.4.0 — composed gate for endpoints that are *both* network-
-    /// gated by paranoid mode AND opt-in via a per-feature toggle. Used
-    /// by [`crate::commands::trending::trending_history_fetch`] and
-    /// future features hitting `brew-browser.zerologic.com/*`.
-    ///
-    /// Returns:
-    /// - `Ok(())` if paranoid is OFF **and** `enhanced_trending_enabled`
-    ///   is `true`.
-    /// - `Err(ParanoidModeBlocked { feature })` if paranoid would deny
-    ///   `require_network` (master switch wins; the per-feature toggle
-    ///   is irrelevant when paranoid is on).
-    /// - `Err(FeatureDisabled { feature })` if paranoid allows but the
-    ///   per-feature toggle is off (or `FirstLaunch` — fresh-install
-    ///   posture is opt-in only).
-    ///
-    /// Fail-closed on `Corrupt` is handled by the inner `require_network`
-    /// call — `Corrupt` always denies first with `ParanoidModeBlocked`.
-    pub async fn require_enhanced_trending(&self) -> Result<(), BrewError> {
-        // Master paranoid gate first — same error variant other endpoints
-        // use, so the frontend toast routing stays uniform.
-        self.require_network("trending_history").await?;
-        // Per-feature opt-in gate. FirstLaunch defaults are `false` for
-        // this field by design (see Settings::default in commands/settings.rs).
-        let guard = self.settings.read().await;
-        match &*guard {
-            SettingsLoadState::Loaded(s) if s.enhanced_trending_enabled => Ok(()),
-            _ => Err(BrewError::FeatureDisabled {
-                feature: "trending_history".to_string(),
-            }),
-        }
-    }
-
-    /// Composed gate for the opt-in live enrichment surface (fresh categories +
-    /// descriptions fetched from `brew-browser.zerologic.com/enrichment/*`).
-    /// Mirrors [`Self::require_enhanced_trending`]: master paranoid switch
-    /// first, then the per-feature `live_enrichment_enabled` toggle. Used by
-    /// the `enrichment_live_*` commands before any network call.
-    ///
-    /// Fail-closed on `Corrupt` is handled by the inner `require_network` call.
-    pub async fn require_live_enrichment(&self) -> Result<(), BrewError> {
-        self.require_network("live_enrichment").await?;
-        let guard = self.settings.read().await;
-        match &*guard {
-            SettingsLoadState::Loaded(s) if s.live_enrichment_enabled => Ok(()),
-            _ => Err(BrewError::FeatureDisabled {
-                feature: "live_enrichment".to_string(),
-            }),
-        }
-    }
-
-    /// v0.5.0 — composed gate for the vulnerability-scanning surface
-    /// (`brew vulns` subprocess + OSV roundtrip + optional GHSA enrich).
-    /// Composes the master paranoid switch with the per-feature
-    /// `vulnerability_scanning_enabled` toggle. Used by
-    /// [`crate::commands::vulns::*`] before any subprocess spawn or
-    /// network call.
-    ///
-    /// Returns:
-    /// - `Ok(())` if paranoid is OFF **and** `vulnerability_scanning_enabled`
-    ///   is `true`.
-    /// - `Err(ParanoidModeBlocked { feature })` if paranoid would deny
-    ///   `require_network` (master switch wins; the per-feature toggle
-    ///   is irrelevant when paranoid is on).
-    /// - `Err(FeatureDisabled { feature })` if paranoid allows but the
-    ///   per-feature toggle is off (or `FirstLaunch` — fresh-install
-    ///   posture is opt-in only).
-    ///
-    /// Fail-closed on `Corrupt` is handled by the inner `require_network`
-    /// call — `Corrupt` always denies first with `ParanoidModeBlocked`.
-    pub async fn require_vulnerability_scanning(&self) -> Result<(), BrewError> {
-        self.require_network("vulnerability_scanning").await?;
-        let guard = self.settings.read().await;
-        match &*guard {
-            SettingsLoadState::Loaded(s) if s.vulnerability_scanning_enabled => Ok(()),
-            _ => Err(BrewError::FeatureDisabled {
-                feature: "vulnerability_scanning".to_string(),
-            }),
         }
     }
 }
@@ -199,11 +119,11 @@ impl AppState {
 /// ledger, github cache, and settings file all derive their paths from
 /// this; the security gates that check "is this path inside our app data
 /// dir?" anchor on it too.
-fn resolve_app_data_dir() -> Result<PathBuf, BrewError> {
-    let mut base = dirs::data_dir().ok_or_else(|| BrewError::Internal {
+fn resolve_app_data_dir() -> Result<PathBuf, AppError> {
+    let mut base = dirs::data_dir().ok_or_else(|| AppError::Internal {
         message: "could not resolve OS data dir".into(),
     })?;
-    base.push("brew-browser");
+    base.push("com.zerologic.agency-agents-app");
     Ok(base)
 }
 
@@ -263,7 +183,7 @@ mod tests {
         let state = build_state_with(SettingsLoadState::Loaded(s)).await;
         let r = state.require_network("trending_fetch").await;
         match r {
-            Err(BrewError::ParanoidModeBlocked { feature }) => {
+            Err(AppError::ParanoidModeBlocked { feature }) => {
                 assert_eq!(feature, "trending_fetch");
             }
             other => panic!("expected ParanoidModeBlocked, got {other:?}"),
@@ -281,7 +201,7 @@ mod tests {
         .await;
         let r = state.require_network("cask_icon_from_homepage").await;
         match r {
-            Err(BrewError::ParanoidModeBlocked { feature }) => {
+            Err(AppError::ParanoidModeBlocked { feature }) => {
                 assert_eq!(feature, "cask_icon_from_homepage");
             }
             other => panic!("expected ParanoidModeBlocked from corrupt, got {other:?}"),
@@ -299,7 +219,7 @@ mod tests {
         for feat in ["trending_fetch", "cask_icon_from_homepage", "catalog_refresh"] {
             let r = state.require_network(feat).await;
             match r {
-                Err(BrewError::ParanoidModeBlocked { feature }) => {
+                Err(AppError::ParanoidModeBlocked { feature }) => {
                     assert_eq!(feature, feat);
                 }
                 other => panic!("expected block for {feat}, got {other:?}"),
@@ -307,164 +227,4 @@ mod tests {
         }
     }
 
-    // ---------- v0.4.0: require_enhanced_trending ----------
-
-    #[tokio::test]
-    async fn require_enhanced_trending_allows_when_toggle_on_and_paranoid_off() {
-        let s = Settings {
-            paranoid_mode: false,
-            enhanced_trending_enabled: true,
-            ..Settings::default()
-        };
-        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
-        assert!(state.require_enhanced_trending().await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn require_enhanced_trending_blocks_when_toggle_off() {
-        // Toggle off → FeatureDisabled (NOT ParanoidModeBlocked — the
-        // cure is a different setting toggle).
-        let s = Settings {
-            paranoid_mode: false,
-            enhanced_trending_enabled: false,
-            ..Settings::default()
-        };
-        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
-        match state.require_enhanced_trending().await {
-            Err(BrewError::FeatureDisabled { feature }) => {
-                assert_eq!(feature, "trending_history");
-            }
-            other => panic!("expected FeatureDisabled, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn require_enhanced_trending_blocks_when_paranoid_on_even_if_toggle_on() {
-        // Master switch wins. Frontend should route to Offline Mode
-        // toggle, not the per-feature toggle.
-        let s = Settings {
-            paranoid_mode: true,
-            enhanced_trending_enabled: true,
-            ..Settings::default()
-        };
-        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
-        match state.require_enhanced_trending().await {
-            Err(BrewError::ParanoidModeBlocked { feature }) => {
-                assert_eq!(feature, "trending_history");
-            }
-            other => panic!("expected ParanoidModeBlocked, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn require_enhanced_trending_blocks_on_first_launch() {
-        // FirstLaunch → require_network allows but the per-feature
-        // toggle defaults to false → FeatureDisabled. Critical for
-        // first-install posture: zero zerologic.com traffic until opt-in.
-        let state = build_state_with(SettingsLoadState::FirstLaunch).await;
-        match state.require_enhanced_trending().await {
-            Err(BrewError::FeatureDisabled { feature }) => {
-                assert_eq!(feature, "trending_history");
-            }
-            other => panic!("expected FeatureDisabled, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn require_enhanced_trending_blocks_when_corrupt() {
-        // Corrupt → paranoid gate fires first with ParanoidModeBlocked.
-        // Important: this is the same error code other endpoints emit
-        // on Corrupt, so the toast UX stays uniform across features.
-        let state = build_state_with(SettingsLoadState::Corrupt {
-            message: "boom".into(),
-        })
-        .await;
-        match state.require_enhanced_trending().await {
-            Err(BrewError::ParanoidModeBlocked { feature }) => {
-                assert_eq!(feature, "trending_history");
-            }
-            other => panic!("expected ParanoidModeBlocked from corrupt, got {other:?}"),
-        }
-    }
-
-    // ---------- v0.5.0: require_vulnerability_scanning ----------
-
-    #[tokio::test]
-    async fn require_vulnerability_scanning_allows_when_toggle_on_and_paranoid_off() {
-        let s = Settings {
-            paranoid_mode: false,
-            vulnerability_scanning_enabled: true,
-            ..Settings::default()
-        };
-        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
-        assert!(state.require_vulnerability_scanning().await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn require_vulnerability_scanning_blocks_when_toggle_off() {
-        // Toggle off → FeatureDisabled (NOT ParanoidModeBlocked — the
-        // cure is a different setting toggle).
-        let s = Settings {
-            paranoid_mode: false,
-            vulnerability_scanning_enabled: false,
-            ..Settings::default()
-        };
-        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
-        match state.require_vulnerability_scanning().await {
-            Err(BrewError::FeatureDisabled { feature }) => {
-                assert_eq!(feature, "vulnerability_scanning");
-            }
-            other => panic!("expected FeatureDisabled, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn require_vulnerability_scanning_blocks_when_paranoid_on_even_if_toggle_on() {
-        // Master switch wins. Frontend should route to Offline Mode
-        // toggle, not the per-feature toggle.
-        let s = Settings {
-            paranoid_mode: true,
-            vulnerability_scanning_enabled: true,
-            ..Settings::default()
-        };
-        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
-        match state.require_vulnerability_scanning().await {
-            Err(BrewError::ParanoidModeBlocked { feature }) => {
-                assert_eq!(feature, "vulnerability_scanning");
-            }
-            other => panic!("expected ParanoidModeBlocked, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn require_vulnerability_scanning_blocks_on_first_launch() {
-        // FirstLaunch → require_network allows but the per-feature
-        // toggle defaults to false → FeatureDisabled. Critical for
-        // first-install posture: zero `brew vulns` invocations and zero
-        // OSV traffic until opt-in.
-        let state = build_state_with(SettingsLoadState::FirstLaunch).await;
-        match state.require_vulnerability_scanning().await {
-            Err(BrewError::FeatureDisabled { feature }) => {
-                assert_eq!(feature, "vulnerability_scanning");
-            }
-            other => panic!("expected FeatureDisabled, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn require_vulnerability_scanning_blocks_when_corrupt() {
-        // Corrupt → paranoid gate fires first with ParanoidModeBlocked,
-        // same as every other composed gate. Keeps the toast routing
-        // uniform across features.
-        let state = build_state_with(SettingsLoadState::Corrupt {
-            message: "boom".into(),
-        })
-        .await;
-        match state.require_vulnerability_scanning().await {
-            Err(BrewError::ParanoidModeBlocked { feature }) => {
-                assert_eq!(feature, "vulnerability_scanning");
-            }
-            other => panic!("expected ParanoidModeBlocked from corrupt, got {other:?}"),
-        }
-    }
 }

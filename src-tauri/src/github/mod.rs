@@ -44,7 +44,7 @@
 //!    `GithubStatusDto { signed_in, username, scopes }` only. Verified
 //!    by `auth::tests::status_dto_never_serializes_token`.
 //! 6. Token never written to disk. Keychain failure surfaces
-//!    `BrewError::KeychainUnavailable` with **no fallback**.
+//!    `AppError::KeychainUnavailable` with **no fallback**.
 //! 7. Token never logged. `Token` is a newtype with a redacted `Debug`
 //!    impl; `clippy::print_*` + `dbg_macro` are denied in `auth.rs`.
 //! 8. Service identifier matches the Tauri bundle identifier. Test
@@ -77,4 +77,4 @@ pub use auth::{
 };
 pub use stats::{fetch_repo_stats, RepoStats};
 #[allow(unused_imports)]
-pub use url::{extract_github_repo, parse_github_url, resolve_github_homepage, GithubRepo};
+pub use url::{extract_github_repo, parse_github_url, GithubRepo};

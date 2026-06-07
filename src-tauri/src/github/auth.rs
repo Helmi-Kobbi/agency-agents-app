@@ -31,9 +31,9 @@
 //!
 //! ## Failure modes
 //!
-//! - **Keychain write fails** → `BrewError::KeychainUnavailable`. No
+//! - **Keychain write fails** → `AppError::KeychainUnavailable`. No
 //!   disk fallback. This is the §12e fail-closed rule.
-//! - **Token request times out** → `BrewError::Network`.
+//! - **Token request times out** → `AppError::Network`.
 //! - **User denies authorization** → `PollResult::Denied`.
 //! - **Code expires before user approves** → `PollResult::Expired`.
 
@@ -44,7 +44,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::BrewError;
+use crate::error::AppError;
 
 // ---------- Constants ----------
 
@@ -145,10 +145,10 @@ pub struct Token(String);
 
 impl Token {
     /// Wrap a raw token. Validates non-empty; rejects whitespace-only.
-    pub fn new(raw: impl Into<String>) -> Result<Self, BrewError> {
+    pub fn new(raw: impl Into<String>) -> Result<Self, AppError> {
         let raw = raw.into();
         if raw.trim().is_empty() {
-            return Err(BrewError::InvalidArgument {
+            return Err(AppError::InvalidArgument {
                 message: "token must not be empty".into(),
             });
         }
@@ -258,14 +258,14 @@ impl From<PollResult> for PollResultDto {
 /// in an in-memory store. Production uses [`SystemKeychain`].
 pub trait KeychainSlot: Send + Sync {
     /// Return the stored value, or `Ok(None)` if no entry exists.
-    /// Surface backend errors as `BrewError::KeychainUnavailable`.
-    fn read(&self, account: &str) -> Result<Option<String>, BrewError>;
+    /// Surface backend errors as `AppError::KeychainUnavailable`.
+    fn read(&self, account: &str) -> Result<Option<String>, AppError>;
 
     /// Persist `value` under `account`. **No retry, no fallback.**
-    fn write(&self, account: &str, value: &str) -> Result<(), BrewError>;
+    fn write(&self, account: &str, value: &str) -> Result<(), AppError>;
 
     /// Delete the entry, treating "no such entry" as success.
-    fn delete(&self, account: &str) -> Result<(), BrewError>;
+    fn delete(&self, account: &str) -> Result<(), AppError>;
 
     /// Read several accounts at once, returning only those with a value.
     ///
@@ -274,7 +274,7 @@ pub trait KeychainSlot: Send + Sync {
     /// `SecItemCopyMatching(kSecMatchLimitAll)` so the launch-time sign-in check
     /// (`status`) costs ONE prompt instead of three. (Mirrors native's
     /// `keychainReadAll`.) The default keeps tests + non-macOS correct.
-    fn read_many(&self, accounts: &[&str]) -> Result<HashMap<String, String>, BrewError> {
+    fn read_many(&self, accounts: &[&str]) -> Result<HashMap<String, String>, AppError> {
         let mut out = HashMap::new();
         for &account in accounts {
             if let Some(value) = self.read(account)? {
@@ -290,9 +290,9 @@ pub trait KeychainSlot: Send + Sync {
 pub struct SystemKeychain;
 
 impl SystemKeychain {
-    fn entry(account: &str) -> Result<keyring::Entry, BrewError> {
+    fn entry(account: &str) -> Result<keyring::Entry, AppError> {
         keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| {
-            BrewError::KeychainUnavailable {
+            AppError::KeychainUnavailable {
                 message: format!("entry({KEYCHAIN_SERVICE}, {account}): {e}"),
             }
         })
@@ -304,7 +304,7 @@ impl SystemKeychain {
     /// read individually. `errSecItemNotFound` (nothing stored yet) maps to an
     /// empty map, not an error. Verbatim intent of native's `keychainReadAll`.
     #[cfg(target_os = "macos")]
-    fn read_all_batch() -> Result<HashMap<String, String>, BrewError> {
+    fn read_all_batch() -> Result<HashMap<String, String>, AppError> {
         use security_framework::item::{ItemClass, ItemSearchOptions, Limit, SearchResult};
 
         /// `errSecItemNotFound` — no matching items, i.e. signed out.
@@ -321,7 +321,7 @@ impl SystemKeychain {
             Ok(items) => items,
             Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => return Ok(HashMap::new()),
             Err(e) => {
-                return Err(BrewError::KeychainUnavailable {
+                return Err(AppError::KeychainUnavailable {
                     message: format!("batch read ({KEYCHAIN_SERVICE}): {e}"),
                 })
             }
@@ -348,32 +348,32 @@ impl SystemKeychain {
 }
 
 impl KeychainSlot for SystemKeychain {
-    fn read(&self, account: &str) -> Result<Option<String>, BrewError> {
+    fn read(&self, account: &str) -> Result<Option<String>, AppError> {
         let entry = Self::entry(account)?;
         match entry.get_password() {
             Ok(s) => Ok(Some(s)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(BrewError::KeychainUnavailable {
+            Err(e) => Err(AppError::KeychainUnavailable {
                 message: format!("read {account}: {e}"),
             }),
         }
     }
 
-    fn write(&self, account: &str, value: &str) -> Result<(), BrewError> {
+    fn write(&self, account: &str, value: &str) -> Result<(), AppError> {
         let entry = Self::entry(account)?;
         entry.set_password(value).map_err(|e| {
-            BrewError::KeychainUnavailable {
+            AppError::KeychainUnavailable {
                 message: format!("write {account}: {e}"),
             }
         })
     }
 
-    fn delete(&self, account: &str) -> Result<(), BrewError> {
+    fn delete(&self, account: &str) -> Result<(), AppError> {
         let entry = Self::entry(account)?;
         match entry.delete_credential() {
             Ok(()) => Ok(()),
             Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(BrewError::KeychainUnavailable {
+            Err(e) => Err(AppError::KeychainUnavailable {
                 message: format!("delete {account}: {e}"),
             }),
         }
@@ -384,7 +384,7 @@ impl KeychainSlot for SystemKeychain {
     /// under the service and the caller picks the keys it needs. On non-macOS
     /// this method is absent, so the trait default (per-account reads) applies.
     #[cfg(target_os = "macos")]
-    fn read_many(&self, _accounts: &[&str]) -> Result<HashMap<String, String>, BrewError> {
+    fn read_many(&self, _accounts: &[&str]) -> Result<HashMap<String, String>, AppError> {
         Self::read_all_batch()
     }
 }
@@ -396,7 +396,7 @@ impl KeychainSlot for SystemKeychain {
 /// Reads the cached `username` + `scopes` blobs from the Keychain
 /// alongside the token. If the token row is missing, returns the
 /// "not signed in" shape.
-pub fn status_with(keychain: &dyn KeychainSlot) -> Result<GithubStatusDto, BrewError> {
+pub fn status_with(keychain: &dyn KeychainSlot) -> Result<GithubStatusDto, AppError> {
     // ONE batched Keychain read for token + username + scopes (macOS: one auth
     // prompt; other backends: the trait default does per-account reads).
     let all = keychain.read_many(&[
@@ -426,7 +426,7 @@ pub fn status_with(keychain: &dyn KeychainSlot) -> Result<GithubStatusDto, BrewE
 }
 
 /// Sign-in status against the production keychain.
-pub fn status() -> Result<GithubStatusDto, BrewError> {
+pub fn status() -> Result<GithubStatusDto, AppError> {
     status_with(&SystemKeychain)
 }
 
@@ -434,7 +434,7 @@ pub fn status() -> Result<GithubStatusDto, BrewError> {
 ///
 /// Returns the wrapped [`Token`] — never the raw string — so callers
 /// can't accidentally pass it into `format!`.
-pub fn read_token_with(keychain: &dyn KeychainSlot) -> Result<Option<Token>, BrewError> {
+pub fn read_token_with(keychain: &dyn KeychainSlot) -> Result<Option<Token>, AppError> {
     match keychain.read(KEYCHAIN_ACCOUNT_TOKEN)? {
         Some(s) => Ok(Some(Token::new(s)?)),
         None => Ok(None),
@@ -442,7 +442,7 @@ pub fn read_token_with(keychain: &dyn KeychainSlot) -> Result<Option<Token>, Bre
 }
 
 /// Borrow the stored token against the production keychain.
-pub fn read_token() -> Result<Option<Token>, BrewError> {
+pub fn read_token() -> Result<Option<Token>, AppError> {
     read_token_with(&SystemKeychain)
 }
 
@@ -453,8 +453,8 @@ pub fn read_token() -> Result<Option<Token>, BrewError> {
 /// version's persistence path didn't populate the field. Callers that
 /// need to gate on a specific scope (e.g. `public_repo`) should treat
 /// `None` and an absent entry in the list the same way: surface
-/// `BrewError::ScopeRequired` with the missing scope.
-pub fn read_scopes_with(keychain: &dyn KeychainSlot) -> Result<Option<Vec<String>>, BrewError> {
+/// `AppError::ScopeRequired` with the missing scope.
+pub fn read_scopes_with(keychain: &dyn KeychainSlot) -> Result<Option<Vec<String>>, AppError> {
     match keychain.read(KEYCHAIN_ACCOUNT_SCOPES)? {
         Some(raw) => match serde_json::from_str::<Vec<String>>(&raw) {
             Ok(v) => Ok(Some(v)),
@@ -467,13 +467,13 @@ pub fn read_scopes_with(keychain: &dyn KeychainSlot) -> Result<Option<Vec<String
 }
 
 /// Read scopes against the production keychain.
-pub fn read_scopes() -> Result<Option<Vec<String>>, BrewError> {
+pub fn read_scopes() -> Result<Option<Vec<String>>, AppError> {
     read_scopes_with(&SystemKeychain)
 }
 
 /// Delete every stored credential. Idempotent — used by the
 /// "Sign out" button in Settings.
-pub fn signout_with(keychain: &dyn KeychainSlot) -> Result<(), BrewError> {
+pub fn signout_with(keychain: &dyn KeychainSlot) -> Result<(), AppError> {
     keychain.delete(KEYCHAIN_ACCOUNT_TOKEN)?;
     keychain.delete(KEYCHAIN_ACCOUNT_USERNAME)?;
     keychain.delete(KEYCHAIN_ACCOUNT_SCOPES)?;
@@ -481,7 +481,7 @@ pub fn signout_with(keychain: &dyn KeychainSlot) -> Result<(), BrewError> {
 }
 
 /// Sign out against the production keychain.
-pub fn signout() -> Result<(), BrewError> {
+pub fn signout() -> Result<(), AppError> {
     signout_with(&SystemKeychain)
 }
 
@@ -503,7 +503,7 @@ struct DeviceCodeResponse {
 /// The function does **not** start the polling loop — the frontend
 /// does that via repeated `poll_device_flow` calls. We just hand back
 /// the opaque `device_code` the frontend needs to drive polling.
-pub async fn start_device_flow() -> Result<DeviceFlowStart, BrewError> {
+pub async fn start_device_flow() -> Result<DeviceFlowStart, AppError> {
     // Fail fast when the client_id is still the build-time placeholder.
     // Without this guard, GitHub rejects the device-code request with an
     // opaque 4xx and the frontend modal sits forever on "Contacting GitHub…"
@@ -513,7 +513,7 @@ pub async fn start_device_flow() -> Result<DeviceFlowStart, BrewError> {
     // setup before release)". The 7-step flow on github.com/settings/apps
     // gives you a real client_id to replace `GITHUB_OAUTH_CLIENT_ID` with.
     if GITHUB_OAUTH_CLIENT_ID.contains("PLACEHOLDER") {
-        return Err(BrewError::Internal {
+        return Err(AppError::Internal {
             message: "GitHub sign-in is not configured in this build. The OAuth App client_id is still the placeholder — see BUILD.md → 'GitHub OAuth App (one-time setup before release)'.".to_string(),
         });
     }
@@ -530,7 +530,7 @@ pub async fn start_device_flow() -> Result<DeviceFlowStart, BrewError> {
         .form(&form)
         .send()
         .await
-        .map_err(|e| BrewError::Network {
+        .map_err(|e| AppError::Network {
             url: DEVICE_CODE_URL.into(),
             message: e.to_string(),
         })?;
@@ -538,18 +538,18 @@ pub async fn start_device_flow() -> Result<DeviceFlowStart, BrewError> {
     let bytes = resp
         .bytes()
         .await
-        .map_err(|e| BrewError::Network {
+        .map_err(|e| AppError::Network {
             url: DEVICE_CODE_URL.into(),
             message: format!("body: {e}"),
         })?;
     if !status.is_success() {
-        return Err(BrewError::HttpStatus {
+        return Err(AppError::HttpStatus {
             url: DEVICE_CODE_URL.into(),
             status: status.as_u16(),
         });
     }
     let parsed: DeviceCodeResponse =
-        serde_json::from_slice(&bytes).map_err(|e| BrewError::JsonParse {
+        serde_json::from_slice(&bytes).map_err(|e| AppError::JsonParse {
             command: DEVICE_CODE_URL.into(),
             message: e.to_string(),
             raw_excerpt: String::from_utf8_lossy(
@@ -589,7 +589,7 @@ struct TokenResponse {
 
 /// Poll the token endpoint once. The caller is responsible for honouring
 /// the `interval` (and for doubling it on `SlowDown` per RFC 8628 §3.5).
-pub async fn poll_device_flow(device_code: &str) -> Result<PollResult, BrewError> {
+pub async fn poll_device_flow(device_code: &str) -> Result<PollResult, AppError> {
     poll_device_flow_with(device_code, &SystemKeychain).await
 }
 
@@ -597,7 +597,7 @@ pub async fn poll_device_flow(device_code: &str) -> Result<PollResult, BrewError
 pub async fn poll_device_flow_with(
     device_code: &str,
     keychain: &dyn KeychainSlot,
-) -> Result<PollResult, BrewError> {
+) -> Result<PollResult, AppError> {
     let client = build_oauth_client()?;
     let form = [
         ("client_id", GITHUB_OAUTH_CLIENT_ID),
@@ -613,17 +613,17 @@ pub async fn poll_device_flow_with(
         .form(&form)
         .send()
         .await
-        .map_err(|e| BrewError::Network {
+        .map_err(|e| AppError::Network {
             url: TOKEN_URL.into(),
             message: e.to_string(),
         })?;
     let status = resp.status();
-    let bytes = resp.bytes().await.map_err(|e| BrewError::Network {
+    let bytes = resp.bytes().await.map_err(|e| AppError::Network {
         url: TOKEN_URL.into(),
         message: format!("body: {e}"),
     })?;
     if !status.is_success() {
-        return Err(BrewError::HttpStatus {
+        return Err(AppError::HttpStatus {
             url: TOKEN_URL.into(),
             status: status.as_u16(),
         });
@@ -665,7 +665,7 @@ pub async fn poll_device_flow_with(
         if let Some(u) = &username {
             keychain.write(KEYCHAIN_ACCOUNT_USERNAME, u)?;
         }
-        let scopes_json = serde_json::to_string(&scopes).map_err(|e| BrewError::Internal {
+        let scopes_json = serde_json::to_string(&scopes).map_err(|e| AppError::Internal {
             message: format!("serialize scopes: {e}"),
         })?;
         keychain.write(KEYCHAIN_ACCOUNT_SCOPES, &scopes_json)?;
@@ -677,10 +677,10 @@ pub async fn poll_device_flow_with(
         Some("slow_down") => Ok(PollResult::SlowDown),
         Some("access_denied") => Ok(PollResult::Denied),
         Some("expired_token") => Ok(PollResult::Expired),
-        Some(other) => Err(BrewError::Internal {
+        Some(other) => Err(AppError::Internal {
             message: format!("github device flow error: {other}"),
         }),
-        None => Err(BrewError::Internal {
+        None => Err(AppError::Internal {
             message: "github device flow returned neither access_token nor error".into(),
         }),
     }
@@ -701,7 +701,7 @@ pub fn slow_down_interval(current: u32) -> u32 {
 
 // ---------- Helpers ----------
 
-fn build_oauth_client() -> Result<reqwest::Client, BrewError> {
+fn build_oauth_client() -> Result<reqwest::Client, AppError> {
     reqwest::Client::builder()
         .timeout(OAUTH_TIMEOUT)
         .user_agent(concat!(
@@ -710,7 +710,7 @@ fn build_oauth_client() -> Result<reqwest::Client, BrewError> {
             " (+https://github.com/msitarzewski/brew-browser)"
         ))
         .build()
-        .map_err(|e| BrewError::Network {
+        .map_err(|e| AppError::Network {
             url: DEVICE_CODE_URL.into(),
             message: format!("client build: {e}"),
         })
@@ -722,7 +722,7 @@ struct UserResponse {
     login: String,
 }
 
-async fn fetch_username(client: &reqwest::Client, token: &str) -> Result<String, BrewError> {
+async fn fetch_username(client: &reqwest::Client, token: &str) -> Result<String, AppError> {
     let resp = client
         .get(USER_URL)
         .header("Accept", "application/vnd.github+json")
@@ -730,13 +730,13 @@ async fn fetch_username(client: &reqwest::Client, token: &str) -> Result<String,
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
-        .map_err(|e| BrewError::Network {
+        .map_err(|e| AppError::Network {
             url: USER_URL.into(),
             message: e.to_string(),
         })?;
     let status = resp.status();
     if !status.is_success() {
-        return Err(BrewError::HttpStatus {
+        return Err(AppError::HttpStatus {
             url: USER_URL.into(),
             status: status.as_u16(),
         });
@@ -744,7 +744,7 @@ async fn fetch_username(client: &reqwest::Client, token: &str) -> Result<String,
     let parsed: UserResponse =
         serde_json::from_slice(&resp.bytes().await.unwrap_or_default()).unwrap_or_default();
     if parsed.login.is_empty() {
-        return Err(BrewError::Internal {
+        return Err(AppError::Internal {
             message: "github /user returned empty login".into(),
         });
     }
@@ -786,12 +786,12 @@ mod tests {
     }
 
     impl KeychainSlot for MockKeychain {
-        fn read(&self, account: &str) -> Result<Option<String>, BrewError> {
+        fn read(&self, account: &str) -> Result<Option<String>, AppError> {
             Ok(self.entries.lock().unwrap().get(account).cloned())
         }
-        fn write(&self, account: &str, value: &str) -> Result<(), BrewError> {
+        fn write(&self, account: &str, value: &str) -> Result<(), AppError> {
             if self.fail_writes {
-                return Err(BrewError::KeychainUnavailable {
+                return Err(AppError::KeychainUnavailable {
                     message: "mock failure".into(),
                 });
             }
@@ -801,7 +801,7 @@ mod tests {
                 .insert(account.to_string(), value.to_string());
             Ok(())
         }
-        fn delete(&self, account: &str) -> Result<(), BrewError> {
+        fn delete(&self, account: &str) -> Result<(), AppError> {
             self.entries.lock().unwrap().remove(account);
             Ok(())
         }
@@ -1007,7 +1007,7 @@ mod tests {
         let kc = MockKeychain::failing();
         let r = kc.write(KEYCHAIN_ACCOUNT_TOKEN, "ghp_secret");
         match r {
-            Err(BrewError::KeychainUnavailable { .. }) => {}
+            Err(AppError::KeychainUnavailable { .. }) => {}
             other => panic!("expected KeychainUnavailable, got {other:?}"),
         }
         // After the failure, nothing is stored (no shadow disk file, no

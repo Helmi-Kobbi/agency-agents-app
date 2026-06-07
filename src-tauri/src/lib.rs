@@ -80,6 +80,17 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .menu(build_app_menu)
         .on_menu_event(handle_menu_event)
+        // Persist window geometry on every resize/move, not just on graceful
+        // exit — so a size change survives even a hard kill (e.g. stopping
+        // `tauri dev` with Ctrl-C, which never runs the exit-save handler).
+        // The state file is tiny; the OS coalesces the writes during a drag.
+        .on_window_event(|window, event| {
+            use tauri::Manager;
+            use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+            if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)) {
+                let _ = window.app_handle().save_window_state(StateFlags::all());
+            }
+        })
         .setup(|app| {
             state::initialize(app)?;
             // Phase 15 — spawn the auto-check scheduler. The task
@@ -137,11 +148,20 @@ pub fn run() {
             corpus::corpus_list,
             corpus::corpus_get,
             corpus::corpus_categories,
+            corpus::catalog_source_get,
+            corpus::catalog_configured,
+            corpus::catalog_source_set,
+            corpus::catalog_detect,
+            corpus::catalog_provision_managed,
+            corpus::catalog_pull,
+            corpus::catalog_status,
+            corpus::catalog_check_updates,
             // Phase 2 — install + reconcile (contracts.md §C). The cross-tool
             // agent state layer: render/ledger/reconcile/tools/projects.
             install::install_agent,
             install::update_agent,
-            install::adopt_agent,
+            install::track_agent,
+            install::agent_diff,
             install::uninstall_agent,
             install::installs_reconcile,
             install::installs_for_agent,
