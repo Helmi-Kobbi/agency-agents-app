@@ -11,7 +11,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 
-import type { InstalledAgent, InstallRecord, Tool, ToolInfo } from "$lib/types";
+import type { AgentDiff, InstalledAgent, InstallRecord, InstallState, Tool, ToolInfo } from "$lib/types";
 
 /** The tools Phase 2 can install to, with display + scope. Mirrors the Rust
     `SUPPORTED` set in `install/mod.rs`. Order = install-menu order. */
@@ -25,6 +25,9 @@ export interface ToolDef {
 // Svelte 5's class-$state transform). Coalesces the many on-mount reconcile()
 // callers into one heavy scan.
 let reconcileInflight: Promise<void> | null = null;
+
+/** Persisted "Install into…" tool selection — remembered across agents/launches. */
+const INSTALL_SELECTION_KEY = "agency-agents:install-selection";
 
 export const SUPPORTED_TOOLS: ToolDef[] = [
   { id: "claudeCode", label: "Claude Code", scope: "user" },
@@ -48,6 +51,43 @@ class InstallStore {
   /** True once the first reconcile has completed (so we can tell "empty"
       apart from "not scanned yet"). */
   reconciled: boolean = $state(false);
+  /** Tools currently checked in the "Install into…" menu. Persisted so the
+      choice is remembered for the next agent and the next launch. */
+  selectedTools: Tool[] = $state([]);
+
+  /** Load the remembered tool selection; defaults to Claude Code on first run. */
+  loadSelection(): void {
+    let parsed: Tool[] = [];
+    try {
+      const raw = localStorage.getItem(INSTALL_SELECTION_KEY);
+      if (raw) {
+        const arr = JSON.parse(raw) as unknown;
+        if (Array.isArray(arr)) {
+          parsed = arr.filter((id): id is Tool => SUPPORTED_TOOLS.some((t) => t.id === id));
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    this.selectedTools = parsed.length > 0 ? parsed : ["claudeCode"];
+  }
+
+  /** Is `tool` checked in the Install-into menu? */
+  isSelected(tool: Tool): boolean {
+    return this.selectedTools.includes(tool);
+  }
+
+  /** Toggle a tool's checked state and persist the selection. */
+  toggleSelected(tool: Tool): void {
+    this.selectedTools = this.isSelected(tool)
+      ? this.selectedTools.filter((t) => t !== tool)
+      : [...this.selectedTools, tool];
+    try {
+      localStorage.setItem(INSTALL_SELECTION_KEY, JSON.stringify(this.selectedTools));
+    } catch {
+      /* ignore */
+    }
+  }
 
   /**
    * Reconcile installs against disk + corpus. Called from many views on mount,
@@ -96,6 +136,19 @@ class InstallStore {
     );
   }
 
+  /** The reconciled state for `slug` in `tool` (current/outdated/modified/
+      removed/foreign), or null if there's no install on disk. Lets the UI show
+      the SAME truth everywhere instead of a flat "installed". */
+  stateFor(slug: string, tool: Tool, projectPath: string | null = null): InstallState | null {
+    const row = this.installed.find(
+      (i) =>
+        i.slug === slug &&
+        i.tool === tool &&
+        (i.projectPath ?? null) === (projectPath ?? null),
+    );
+    return row?.state ?? null;
+  }
+
   async install(slug: string, tool: Tool, projectPath: string | null = null): Promise<InstallRecord> {
     this.busy = `${slug}:${tool}`;
     try {
@@ -130,15 +183,25 @@ class InstallStore {
     }
   }
 
-  /** Adopt a recognized Foreign install into the ledger. */
-  async adopt(slug: string, tool: Tool, projectPath: string | null = null): Promise<void> {
+  /**
+   * Track a recognized Foreign install into the ledger NON-DESTRUCTIVELY — the
+   * backend records provenance but never writes to the user's file. After this,
+   * reconcile shows Current (file already matches the catalog) or Modified (it
+   * differs; an explicit Update reconciles it, backing up first).
+   */
+  async track(slug: string, tool: Tool, projectPath: string | null = null): Promise<void> {
     this.busy = `${slug}:${tool}`;
     try {
-      await invoke("adopt_agent", { slug, tool, projectPath });
+      await invoke("track_agent", { slug, tool, projectPath });
       await this.reconcile();
     } finally {
       this.busy = null;
     }
+  }
+
+  /** Diff the on-disk file against the canonical render (review before Update). */
+  async diff(slug: string, tool: Tool, projectPath: string | null = null): Promise<AgentDiff> {
+    return invoke<AgentDiff>("agent_diff", { slug, tool, projectPath });
   }
 
   /** Label for a tool id (for view-models that only have the wire value). */

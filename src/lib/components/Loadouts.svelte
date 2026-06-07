@@ -17,7 +17,7 @@
   // Pure reader — install state is reconciled globally in +layout.
 
   // The loadout = what WE installed (in the ledger). Foreign installs aren't
-  // part of it until adopted, so they're excluded from the managed count.
+  // part of it until tracked, so they're excluded from the managed count.
   const managed = $derived(install.installed.filter((i) => i.state !== "foreign"));
   let busy = $state(false);
 

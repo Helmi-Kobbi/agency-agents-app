@@ -69,6 +69,20 @@ class CorpusStore {
   }
 
   /**
+   * Force a re-fetch of the agent list + taxonomy — used after the catalog
+   * SOURCE changes (clone switch / provision / pull), where the cached agents
+   * are now stale. Clears caches so `ensureLoaded` actually re-runs.
+   */
+  async reload(): Promise<void> {
+    this.loadPromise = null;
+    this.agents = [];
+    this.categories = [];
+    this.error = null;
+    this.bodyCache.clear();
+    return this.ensureLoaded();
+  }
+
+  /**
    * Full agent (incl. markdown `body`) for the slide-over. Memoised per slug.
    * Soft-fails to `null` so a backend hiccup shows the list-view agent without
    * a body rather than crashing the panel.

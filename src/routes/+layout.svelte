@@ -6,6 +6,8 @@
   import { install } from "$lib/stores/install.svelte";
   import { activity } from "$lib/stores/activity.svelte";
   import { settings } from "$lib/stores/settings.svelte";
+  import { catalog } from "$lib/stores/catalog.svelte";
+  import CatalogFirstRun from "$lib/components/CatalogFirstRun.svelte";
 
   let { children } = $props();
 
@@ -18,6 +20,8 @@
     ui.loadConfirmDestructiveFromStorage();
     ui.loadActivitySettingsFromStorage();
     ui.loadSidebarCollapsedFromStorage();
+    ui.loadSidebarWidthFromStorage();
+    ui.loadDetailPaneWidthFromStorage();
     activity.hydrate();
     // Install state — reconcile ONCE here at the app root, not inside the view
     // components. A view that both reads install.* state AND triggers a mutation
@@ -25,10 +29,14 @@
     // are now pure readers; Rescan buttons re-trigger on user action.
     void install.reconcile();
     void install.loadTools();
+    install.loadSelection();
     // Phase 12d — hydrate the persisted settings.json into the renderer
     // so the Network section, the Catalog stale banner, and the cask
     // icon mode all read from one source of truth.
     void settings.load();
+    // Catalog source (#1) — load the persisted choice; if none has been made
+    // the first-run picker renders over the app until the user chooses.
+    void catalog.load();
     // NOTE: GitHub sign-in status is intentionally NOT hydrated here.
     // `github.loadStatus()` reads from macOS Keychain, which prompts
     // the user the first time a new app binary tries to access an
@@ -69,3 +77,7 @@
 -->
 
 {@render children()}
+
+{#if !catalog.configured}
+  <CatalogFirstRun />
+{/if}

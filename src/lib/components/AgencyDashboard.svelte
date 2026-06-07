@@ -44,7 +44,7 @@
     </button>
     <button class="stat" class:info={foreign > 0} onclick={() => ui.setSection("library")}>
       <span class="s-num">{foreign}</span>
-      <span class="s-lbl">found to adopt</span>
+      <span class="s-lbl">found to track</span>
     </button>
   </div>
 

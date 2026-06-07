@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
 
   import Sidebar from "$lib/components/Sidebar.svelte";
+  import ResizeHandle from "$lib/components/ResizeHandle.svelte";
   import AgencyDashboard from "$lib/components/AgencyDashboard.svelte";
   import Loadouts from "$lib/components/Loadouts.svelte";
   import PersonaDiscover from "$lib/components/PersonaDiscover.svelte";
@@ -19,7 +20,12 @@
   import PanelLeftClose from "@lucide/svelte/icons/panel-left-close";
   import PanelLeftOpen from "@lucide/svelte/icons/panel-left-open";
 
-  import { ui } from "$lib/stores/ui.svelte";
+  import {
+    ui,
+    SIDEBAR_MIN_WIDTH,
+    SIDEBAR_MAX_WIDTH,
+    SIDEBAR_DEFAULT_WIDTH,
+  } from "$lib/stores/ui.svelte";
   import { toast } from "$lib/stores/toast.svelte";
   import type { SidebarSection, ThemePreference } from "$lib/types";
 
@@ -110,7 +116,11 @@
   });
 </script>
 
-<div class="app" class:sidebar-collapsed={ui.sidebarCollapsed}>
+<div
+  class="app"
+  class:sidebar-collapsed={ui.sidebarCollapsed}
+  style="--sidebar-width: {ui.sidebarWidth}px"
+>
   <!--
     Window title bar. Spans the full width above the main split so it
     reads as one unified chrome (the Mac unified-toolbar pattern).
@@ -148,6 +158,18 @@
   </header>
   <div class="main">
     <Sidebar />
+    {#if !ui.sidebarCollapsed}
+      <ResizeHandle
+        width={ui.sidebarWidth}
+        min={SIDEBAR_MIN_WIDTH}
+        max={SIDEBAR_MAX_WIDTH}
+        defaultWidth={SIDEBAR_DEFAULT_WIDTH}
+        direction="right"
+        label="Resize sidebar"
+        onChange={(w) => (ui.sidebarWidth = w)}
+        onCommit={(w) => ui.setSidebarWidth(w)}
+      />
+    {/if}
     <main class="content">
         <div class="section-pane">
           {#if ui.section === "dashboard"}
@@ -180,9 +202,11 @@
     flex-direction: column;
     height: 100%;
     background: var(--color-surface);
-    /* Title bar layout knobs — driven by sidebar state. */
-    --titlebar-toggle-left: 168px;  /* inside sidebar's right edge (200 − 32) */
-    --titlebar-title-left: 220px;   /* just past the sidebar divider */
+    /* Title bar layout knobs — track the live sidebar width so the toggle
+       and page title stay aligned with the (resizable) sidebar's right edge.
+       `--sidebar-width` is set inline from `ui.sidebarWidth`. */
+    --titlebar-toggle-left: calc(var(--sidebar-width, 200px) - 32px);
+    --titlebar-title-left: calc(var(--sidebar-width, 200px) + 20px);
   }
   .app.sidebar-collapsed {
     --titlebar-toggle-left: 84px;   /* just past the traffic lights */

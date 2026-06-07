@@ -147,7 +147,7 @@
     class="ctrl donate"
     onclick={openSponsor}
     title="Donate via GitHub Sponsors"
-    aria-label="Donate to brew-browser on GitHub Sponsors"
+    aria-label="Support Agency Agents on GitHub Sponsors"
   >
     <Heart size={14} fill="currentColor" />
   </button>

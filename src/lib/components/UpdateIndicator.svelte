@@ -2,7 +2,7 @@
   /**
    * UpdateIndicator.svelte — Phase 15
    *
-   * Title-bar pill that surfaces a "newer brew-browser version is
+   * Title-bar pill that surfaces a "newer Agency Agents version is
    * available" notice in chrome (the Mac convention — Mail's unread
    * count, Notes's sync dot) rather than in a modal.
    *
@@ -82,8 +82,8 @@
     tabindex="0"
     onclick={onPillClick}
     onkeydown={onPillKeydown}
-    aria-label={`Update available: brew-browser ${info.version}. Click to open Settings.`}
-    title={`brew-browser ${info.version} is available`}
+    aria-label={`Update available: Agency Agents ${info.version}. Click to open Settings.`}
+    title={`Agency Agents ${info.version} is available`}
   >
     <span class="text" aria-hidden="true">
       <ArrowUp size={12} />

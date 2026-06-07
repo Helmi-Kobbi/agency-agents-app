@@ -77,7 +77,7 @@
       see the changelog + assets even when the manifest snippet is
       terse. */
   let releaseNotesUrl = $derived(
-    info ? `https://github.com/msitarzewski/brew-browser/releases/tag/v${info.version}` : null,
+    info ? `https://github.com/msitarzewski/Agency Agents/releases/tag/v${info.version}` : null,
   );
 
   function onOpenReleaseNotes() {
@@ -123,7 +123,7 @@
       </p>
     {:else}
       <p class="hint">
-        Fetches <code>brew-browser.zerologic.com/updater.json</code> and
+        Fetches <code>agency-agents-app.zerologic.com/updater.json</code> and
         compares the published version to the one you're running. No
         version number is sent.
       </p>
@@ -143,7 +143,7 @@
       <span class="toggle-label">Auto-check daily</span>
     </label>
     <p class="hint">
-      When on, brew-browser checks the manifest once every 24 hours and
+      When on, Agency Agents checks the manifest once every 24 hours and
       surfaces a notice in the title bar if a newer version is available.
       Suspended automatically while Offline Mode is on.
     </p>
@@ -160,7 +160,7 @@
 
   <!-- Conditional: notice card when an update is available -->
   {#if info}
-    <div class="notice" role="region" aria-label={`Update available: brew-browser ${info.version}`}>
+    <div class="notice" role="region" aria-label={`Update available: Agency Agents ${info.version}`}>
       <div class="notice-head">
         <strong>v{info.version} available</strong>
         <button
@@ -182,14 +182,14 @@
           type="button"
           class="btn-primary"
           onclick={onRelaunch}
-          title="Relaunch into the freshly-installed brew-browser"
+          title="Relaunch into the freshly-installed Agency Agents"
         >
           <RotateCw size={14} /> Relaunch now
         </button>
       {:else if updater.installing}
         <div class="progress" role="status" aria-live="polite">
           <span class="spin"><Loader size={16} /></span>
-          <span>Downloading and verifying brew-browser v{info.version}…</span>
+          <span>Downloading and verifying Agency Agents v{info.version}…</span>
         </div>
       {:else if updater.error}
         <div class="result error">
@@ -211,7 +211,7 @@
           class="btn-primary"
           onclick={onInstall}
           disabled={offline}
-          title={offline ? "Disabled by Offline Mode" : `Download and install brew-browser v${info.version}`}
+          title={offline ? "Disabled by Offline Mode" : `Download and install Agency Agents v${info.version}`}
         >
           <Download size={14} /> Install update
         </button>

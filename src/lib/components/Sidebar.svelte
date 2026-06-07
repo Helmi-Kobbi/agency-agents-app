@@ -50,7 +50,12 @@
   const agentCount = $derived(corpus.agents.length);
 </script>
 
-<aside class="sidebar" class:collapsed={ui.sidebarCollapsed} aria-label="Primary navigation">
+<aside
+  class="sidebar"
+  class:collapsed={ui.sidebarCollapsed}
+  style="width: {ui.sidebarCollapsed ? 56 : ui.sidebarWidth}px"
+  aria-label="Primary navigation"
+>
   <button class="brand" onclick={() => ui.setSection("personas")} title="Agency Agents — Home">
     <span class="brand-mark" aria-hidden="true">🤖</span>
     <span class="brand-name">Agency Agents</span>
@@ -88,7 +93,8 @@
 
 <style>
   .sidebar {
-    width: 200px;
+    /* width is set inline from ui.sidebarWidth (or 56px collapsed) so the
+       resize handle in +page.svelte can drive it live. */
     flex: none;
     background: var(--color-surface-raised);
     border-right: 1px solid var(--color-border);

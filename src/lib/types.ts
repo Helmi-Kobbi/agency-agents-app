@@ -298,16 +298,16 @@ export function isBrewError(e: unknown): e is BrewErrorPayload {
 /** Human-readable message for a BrewError. */
 export function brewErrorMessage(e: BrewErrorPayload): string {
   switch (e.code) {
-    case "brew_not_found":      return "Homebrew not found on PATH.";
-    case "brew_exit_non_zero":  return e.friendlyMessage ?? `brew exited ${e.exitCode}: ${e.stderrExcerpt}`;
-    case "json_parse":          return `Failed to parse brew output: ${e.message}`;
+    case "brew_not_found":      return "A required tool was not found on PATH.";
+    case "brew_exit_non_zero":  return e.friendlyMessage ?? `Command exited ${e.exitCode}: ${e.stderrExcerpt}`;
+    case "json_parse":          return `Failed to parse output: ${e.message}`;
     case "io":                  return `I/O error: ${e.message}`;
     case "network":             return `Network error: ${e.message}`;
     case "http_status":         return `HTTP ${e.status} from ${e.url}`;
     case "invalid_argument":    return `Invalid argument: ${e.message}`;
     case "job_not_found":       return `Job ${e.jobId} not found.`;
     case "canceled":            return "Operation canceled.";
-    case "brewfile_not_found":  return `Brewfile "${e.id}" not found.`;
+    case "brewfile_not_found":  return `"${e.id}" not found.`;
     case "internal":            return `Internal error: ${e.message}`;
     case "paranoid_mode_blocked":
       return `Offline Mode is on — ${e.feature} is blocked. Disable it in Settings → Network.`;
@@ -330,7 +330,7 @@ export function brewErrorMessage(e: BrewErrorPayload): string {
     case "downgrade_rejected":
       return `Update refused: ${e.target} is not newer than the installed version (${e.current}).`;
     case "vulns_not_installed":
-      return `brew vulns subcommand not installed. Click 'Install brew-vulns' or run \`${e.installCommand}\` to enable scanning.`;
+      return `A required subcommand is not installed. Run \`${e.installCommand}\` to enable it.`;
   }
 }
 
@@ -419,6 +419,61 @@ export interface CorpusMeta {
 }
 
 /**
+ * Where the active agent catalog lives. Discriminated on `kind`:
+ * - `bundled` — app-managed copy from the bundled baseline (default).
+ * - `managed` — a clone the app provisioned/owns (default `~/.agency-agents`).
+ * - `userClone` — the user's own clone; `manage` = permission to pull it.
+ */
+export type CatalogSource =
+  | { kind: "bundled" }
+  | { kind: "managed"; path: string }
+  | { kind: "userClone"; path: string; manage: boolean };
+
+/** Live status of the active catalog (source + git provenance + freshness). */
+export interface CatalogStatus {
+  source: CatalogSource;
+  root: string | null;
+  isGit: boolean;
+  branch: string | null;
+  commit: string | null;
+  lastCommitSubject: string | null;
+  lastCommitDate: string | null;
+  dirtyCount: number;
+  remoteUrl: string | null;
+  /** "owner/repo" parsed from the remote, for GitHub repo stats. */
+  repoSlug: string | null;
+  version: string;
+  fetchedAt: string;
+  agentCount: number;
+}
+
+/** Result of checking the active catalog for upstream updates (diff stats). */
+export interface CatalogUpdateCheck {
+  isGit: boolean;
+  behind: number;
+  ahead: number;
+  changedFiles: number;
+  diffstat: string;
+  upToDate: boolean;
+}
+
+/** A catalog directory discovered on disk (first-run / Settings picker). */
+export interface CatalogCandidate {
+  path: string;
+  /** "managed" for ~/.agency-agents, else "userClone". */
+  kind: "managed" | "userClone";
+  hasGit: boolean;
+  agentCount: number;
+}
+
+/** Result of `catalog_detect`. */
+export interface CatalogDetection {
+  gitAvailable: boolean;
+  scanned: boolean;
+  candidates: CatalogCandidate[];
+}
+
+/**
  * One row of `installs.json` — the ledger of local install actions.
  * `sourceHash` records the corpus version installed from; `renderedHash`
  * is the SHA-256 of the exact bytes written after per-tool conversion.
@@ -467,6 +522,21 @@ export interface InstalledAgent {
   dest: string;
   state: InstallState;
   updateKind: UpdateKind | null;
+}
+
+/** Result of `agent_diff` — current on-disk contents vs the canonical render
+    the app would write. Powers "review before Update" with zero file writes. */
+export interface AgentDiff {
+  slug: string;
+  tool: Tool;
+  projectPath: string | null;
+  dest: string;
+  /** Current on-disk contents (null if the file is missing). */
+  onDisk: string | null;
+  /** The canonical render the app would write. */
+  proposed: string;
+  /** Whether the two differ (false ⇒ Update is a no-op). */
+  differs: boolean;
 }
 
 /** View-model for the Tools section — a detected AI tool plus its
@@ -527,6 +597,7 @@ export type ThemePreference = "light" | "dark" | "system";
     `ui.openSettings(section)`. */
 export type SettingsSection =
   | "appearance"
+  | "catalog"
   | "network"
   | "github"
   | "activity"

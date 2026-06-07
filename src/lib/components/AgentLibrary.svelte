@@ -123,13 +123,20 @@
               <button class="act" disabled={busy} onclick={() => act(() => install.update(r.slug, r.tool, r.projectPath), `Updated ${r.name}`)}>
                 <RefreshIcon size={14} /><span>Update</span>
               </button>
-            {:else if r.state === "removed" || r.state === "modified"}
+            {:else if r.state === "modified"}
+              <!-- Restore the canonical render; the user's edited file is backed
+                   up first (backups/ under app data) so this is reversible. -->
+              <button class="act" disabled={busy} title="Back up your edits and restore the catalog version" onclick={() => act(() => install.update(r.slug, r.tool, r.projectPath), `Restored ${r.name} (your copy was backed up)`)}>
+                <RefreshIcon size={14} /><span>Restore</span>
+              </button>
+            {:else if r.state === "removed"}
               <button class="act" disabled={busy} onclick={() => act(() => install.install(r.slug, r.tool, r.projectPath), `Reinstalled ${r.name}`)}>
                 <DownloadIcon size={14} /><span>Reinstall</span>
               </button>
             {:else if r.state === "foreign"}
-              <button class="act primary" disabled={busy} onclick={() => act(() => install.adopt(r.slug, r.tool, r.projectPath), `Adopted ${r.name}`)}>
-                <PlusIcon size={14} /><span>Adopt</span>
+              <!-- Track is non-destructive: records provenance, never writes. -->
+              <button class="act primary" disabled={busy} title="Start tracking this file — no changes are written" onclick={() => act(() => install.track(r.slug, r.tool, r.projectPath), `Tracking ${r.name}`)}>
+                <PlusIcon size={14} /><span>Track</span>
               </button>
             {/if}
             {#if r.state !== "foreign"}

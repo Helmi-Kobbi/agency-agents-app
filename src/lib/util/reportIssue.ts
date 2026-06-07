@@ -1,12 +1,12 @@
 /**
- * "Report to brew-browser" — surfaces a pre-filled GitHub new-issue URL
+ * "Report to Agency Agents" — surfaces a pre-filled GitHub new-issue URL
  * from any error context the user encounters in the app.
  *
  * Two entry points:
  *
  *   - `reportableToastError(title, error)` — for catch blocks. Shows a
  *     `toast.error` with the friendly message in the body AND a
- *     "Report to brew-browser" action button below it. One-call upgrade
+ *     "Report to Agency Agents" action button below it. One-call upgrade
  *     of the old `toast.error(title, isBrewError(e) ? e.code : String(e))`
  *     anti-pattern (which threw away the friendly message and gave the
  *     user no recourse beyond the raw discriminator string).
@@ -31,7 +31,7 @@ import {
 import { safeOpenUrl } from "$lib/util/url";
 
 const REPO_NEW_ISSUE_URL =
-  "https://github.com/msitarzewski/brew-browser/issues/new";
+  "https://github.com/msitarzewski/agency-agents-app/issues/new";
 
 /** Cap on the stderr excerpt we include in the pre-filled body. Keeps
  *  the resulting URL well under GitHub's ~8 KiB limit even with the
@@ -72,7 +72,7 @@ async function getAppVersion(): Promise<string> {
 /** Build the issue body (markdown). */
 function buildBody(ctx: ReportContext, appVer: string): string {
   const lines: string[] = [
-    `**brew-browser:** ${appVer}`,
+    `**Agency Agents:** ${appVer}`,
   ];
   if (ctx.errorCode) lines.push(`**Error code:** \`${ctx.errorCode}\``);
   if (ctx.command) lines.push(`**Command:** \`${ctx.command}\``);
@@ -101,7 +101,7 @@ export async function openReportIssue(ctx: ReportContext): Promise<void> {
   const appVer = await getAppVersion();
 
   const params = new URLSearchParams();
-  params.set("title", `[brew-browser] ${ctx.summary}`);
+  params.set("title", `[Agency Agents] ${ctx.summary}`);
   params.set("body", buildBody(ctx, appVer));
   params.set("labels", "from-app");
 
@@ -157,7 +157,7 @@ export function reportContextFromActivityJob(
  *   toast.error(title, isBrewError(e) ? e.code : String(e))
  *
  * Renders the friendly message in the toast body AND attaches a
- * "Report to brew-browser" action button that opens the pre-filled
+ * "Report to Agency Agents" action button that opens the pre-filled
  * GitHub new-issue URL via `safeOpenUrl`.
  *
  * The friendly message comes from `brewErrorMessage(e)` — which on
@@ -170,7 +170,7 @@ export function reportableToastError(title: string, e: unknown): void {
   if (isBrewError(e)) {
     const ctx = reportContextFromBrewError(e, title);
     toast.error(title, brewErrorMessage(e), {
-      label: "Report to brew-browser",
+      label: "Report to Agency Agents",
       onClick: () => {
         void openReportIssue(ctx);
       },
@@ -179,7 +179,7 @@ export function reportableToastError(title: string, e: unknown): void {
   }
   const stringified = String(e);
   toast.error(title, stringified, {
-    label: "Report to brew-browser",
+    label: "Report to Agency Agents",
     onClick: () => {
       void openReportIssue({
         summary: title,

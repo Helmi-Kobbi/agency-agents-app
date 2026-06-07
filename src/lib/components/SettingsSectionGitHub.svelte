@@ -65,11 +65,11 @@
         disabled={toggleDisabled}
       />
       <span class="toggle-track" aria-hidden="true"></span>
-      <span class="toggle-label">Show GitHub stats on package pages</span>
+      <span class="toggle-label">Show GitHub repository stats</span>
     </label>
     <p class="hint">
-      Show repo stars, forks, and last release for any package whose
-      homepage is a GitHub URL. brew-browser fetches public repo metadata
+      Show stars, forks, and the latest release for the agency-agents catalog
+      repo (in Settings → Catalog). Agency Agents fetches public repo metadata
       from <code>api.github.com</code>.
     </p>
   </div>
@@ -104,8 +104,8 @@
       </button>
       <p class="hint">
         Opens GitHub's standard "Authorize app" flow in your browser. No
-        password is ever entered into brew-browser. This is required to Star,
-        Watch, and file issues on GitHub with brew-browser.
+        password is ever entered into Agency Agents. Signing in lifts the API
+        rate limit and lets you star, watch, and file issues on the catalog repo.
       </p>
     {/if}
   </div>
@@ -117,7 +117,7 @@
       <strong>What sign-in is used for</strong>
     </div>
     <p class="privacy-body">
-      brew-browser stores your token in the macOS Keychain. The token is
+      Agency Agents stores your token in the macOS Keychain. The token is
       <strong>never</strong> sent over IPC to the renderer,
       <strong>never</strong> written to disk, and <strong>never</strong>
       logged. Only the derived <code>{`{ signedIn, username, scopes }`}</code>
@@ -146,11 +146,6 @@
     font-weight: var(--fw-semibold);
     color: var(--color-text-primary);
     margin-bottom: var(--space-2);
-  }
-  .lead {
-    font-size: var(--text-body);
-    color: var(--color-text-secondary);
-    line-height: var(--lh-normal);
   }
   .field {
     display: flex;
@@ -276,16 +271,6 @@
     gap: 6px;
     color: var(--color-text-primary);
     margin-bottom: var(--space-2);
-  }
-  .privacy ul {
-    margin: 0 0 var(--space-2) 0;
-    padding-left: var(--space-5);
-    color: var(--color-text-secondary);
-    font-size: var(--text-body-sm);
-    line-height: var(--lh-snug);
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
   }
   .privacy-body {
     color: var(--color-text-secondary);

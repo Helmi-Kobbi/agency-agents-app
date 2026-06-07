@@ -16,6 +16,7 @@
   import { onMount } from "svelte";
   import SearchIcon from "@lucide/svelte/icons/search";
   import XIcon from "@lucide/svelte/icons/x";
+  import PlusIcon from "@lucide/svelte/icons/plus";
   import ChevronLeft from "@lucide/svelte/icons/chevron-left";
   import Download from "@lucide/svelte/icons/download";
 
@@ -23,37 +24,74 @@
   import Input from "./Input.svelte";
   import LoadingState from "./LoadingState.svelte";
   import EmptyState from "./EmptyState.svelte";
+  import ResizeHandle from "./ResizeHandle.svelte";
   import { corpus } from "$lib/stores/corpus.svelte";
+  import {
+    ui,
+    DETAIL_PANE_MIN_WIDTH,
+    DETAIL_PANE_DEFAULT_WIDTH,
+    clampDetailPaneWidth,
+  } from "$lib/stores/ui.svelte";
   import { install, SUPPORTED_TOOLS, type ToolDef } from "$lib/stores/install.svelte";
   import { toast } from "$lib/stores/toast.svelte";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
   import { renderMarkdown } from "$lib/util/markdown";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import type { Agent } from "$lib/types";
+  import type { Agent, InstallState } from "$lib/types";
 
   // Pure reader of install state (reconciled globally in +layout); only
   // corpus.ensureLoaded() runs here (its own guard makes it safe).
   onMount(() => corpus.ensureLoaded());
 
   // ── Install flow ─────────────────────────────────────────────────
-  // User-scoped tools install in one click. Project-scoped tools (cursor,
-  // opencode) first prompt for a project folder, then install + track it.
+  // Multi-select: check one or more tools (remembered across agents/launches),
+  // then install into all of them at once. Project-scoped tools (cursor,
+  // opencode) prompt for a folder as they're reached.
   let installMenuOpen = $state(false);
+  let installing = $state(false);
 
-  async function doInstall(agent: Agent, tool: ToolDef) {
-    let projectPath: string | null = null;
-    if (tool.scope === "project") {
-      const picked = await openDialog({ directory: true, title: `Install ${agent.name} into…` });
-      if (!picked || Array.isArray(picked)) return; // cancelled
-      projectPath = picked;
+  async function installSelected(agent: Agent) {
+    const tools = SUPPORTED_TOOLS.filter((t) => install.isSelected(t.id));
+    if (tools.length === 0) {
+      toast.info("Pick at least one tool to install into.");
+      return;
     }
+    installing = true;
+    let ok = 0;
     try {
-      await install.install(agent.slug, tool.id, projectPath);
-      toast.success(`Installed ${agent.name}`, `→ ${tool.label}${projectPath ? ` (${projectPath})` : ""}`);
-    } catch (e) {
-      toast.error(`Install failed`, String(e));
+      for (const tool of tools) {
+        let projectPath: string | null = null;
+        if (tool.scope === "project") {
+          const picked = await openDialog({ directory: true, title: `Install ${agent.name} into ${tool.label}…` });
+          if (!picked || Array.isArray(picked)) continue; // skip this tool if cancelled
+          projectPath = picked;
+        }
+        try {
+          await install.install(agent.slug, tool.id, projectPath);
+          ok++;
+        } catch (e) {
+          toast.error(`Install failed: ${tool.label}`, String(e));
+        }
+      }
+    } finally {
+      installing = false;
     }
-    installMenuOpen = false;
+    if (ok > 0) {
+      toast.success(`Installed ${agent.name}`, `into ${ok} tool${ok === 1 ? "" : "s"}`);
+      installMenuOpen = false;
+    }
+  }
+
+  // Reconciled-state badge shown in the install menu + footer chips, so both
+  // surfaces tell the SAME truth (a flat "installed" hid Foreign/Outdated).
+  function stateBadge(s: InstallState): { label: string; tone: string } {
+    switch (s) {
+      case "current":  return { label: "installed", tone: "done" };
+      case "outdated": return { label: "update", tone: "warn" };
+      case "modified": return { label: "modified", tone: "warn" };
+      case "foreign":  return { label: "untracked", tone: "info" };
+      case "removed":  return { label: "missing", tone: "danger" };
+    }
   }
 
   async function doUninstall(agent: Agent, tool: ToolDef, projectPath: string | null) {
@@ -260,7 +298,19 @@
     aria-label="Close agent detail"
     onclick={closeDetail}
   ></button>
-  <aside class="persona-detail" aria-label={`${panelAgent.name} detail`}>
+  <aside class="persona-detail" style="width: {ui.detailPaneWidth}px" aria-label={`${panelAgent.name} detail`}>
+    <div class="pd-resize">
+      <ResizeHandle
+        width={ui.detailPaneWidth}
+        min={DETAIL_PANE_MIN_WIDTH}
+        max={900}
+        defaultWidth={DETAIL_PANE_DEFAULT_WIDTH}
+        direction="left"
+        label="Resize agent detail"
+        onChange={(w) => (ui.detailPaneWidth = clampDetailPaneWidth(w))}
+        onCommit={(w) => ui.setDetailPaneWidth(w)}
+      />
+    </div>
     <header class="pd-head">
       <span class="pd-emoji" aria-hidden="true">{panelAgent.emoji ?? "🧩"}</span>
       <div class="pd-titles">
@@ -301,21 +351,29 @@
         <div class="pd-installed">
           {#each here as row (row.tool + (row.projectPath ?? ""))}
             {@const td = SUPPORTED_TOOLS.find((t) => t.id === row.tool)}
+            {@const foreign = row.state === "foreign"}
             <button
               class="installed-chip"
               class:warn={row.state !== "current"}
-              title={`${row.dest}${row.state !== "current" ? ` — ${row.state}` : ""} · click to remove`}
-              onclick={() =>
-                panelAgent &&
-                doUninstall(
-                  panelAgent,
-                  td ?? { id: row.tool, label: row.tool, scope: row.scope },
-                  row.projectPath ?? null,
-                )}
+              title={foreign
+                ? `${row.dest} — untracked (installed outside the app). Click to Track it (no files changed).`
+                : `${row.dest}${row.state !== "current" ? ` — ${row.state}` : ""} · click to remove`}
+              onclick={() => {
+                if (!panelAgent) return;
+                if (foreign) {
+                  void install.track(row.slug, row.tool, row.projectPath ?? null);
+                } else {
+                  void doUninstall(
+                    panelAgent,
+                    td ?? { id: row.tool, label: row.tool, scope: row.scope },
+                    row.projectPath ?? null,
+                  );
+                }
+              }}
             >
               <span class="ic">{row.state === "current" ? "✓" : "!"}</span>
               <span class="t">{td?.label ?? row.tool}</span>
-              <XIcon size={12} />
+              {#if foreign}<PlusIcon size={12} />{:else}<XIcon size={12} />{/if}
             </button>
           {/each}
         </div>
@@ -325,22 +383,33 @@
         <button class="install-btn" onclick={() => (installMenuOpen = !installMenuOpen)}>
           <Download size={15} />
           <span>Install into…</span>
+          {#if install.selectedTools.length > 0}<span class="sel-count">{install.selectedTools.length}</span>{/if}
         </button>
         {#if installMenuOpen}
-          <div class="install-menu" role="menu">
+          <div class="install-menu" role="group" aria-label="Install into tools">
             {#each SUPPORTED_TOOLS as t (t.id)}
-              {@const done = panelAgent ? install.isInstalled(panelAgent.slug, t.id) : false}
-              <button
-                class="install-opt"
-                role="menuitem"
-                disabled={t.scope === "user" && done}
-                onclick={() => panelAgent && doInstall(panelAgent, t)}
-              >
+              {@const st = panelAgent ? install.stateFor(panelAgent.slug, t.id) : null}
+              <label class="install-opt">
+                <input
+                  type="checkbox"
+                  checked={install.isSelected(t.id)}
+                  onchange={() => install.toggleSelected(t.id)}
+                />
                 <span class="t">{t.label}</span>
                 {#if t.scope === "project"}<span class="scope-tag">project</span>{/if}
-                {#if t.scope === "user" && done}<span class="scope-tag done">installed</span>{/if}
-              </button>
+                {#if st}{@const b = stateBadge(st)}<span class="scope-tag {b.tone}">{b.label}</span>{/if}
+              </label>
             {/each}
+            <button
+              class="install-go"
+              disabled={install.selectedTools.length === 0 || installing}
+              onclick={() => panelAgent && installSelected(panelAgent)}
+            >
+              <Download size={14} />
+              {installing
+                ? "Installing…"
+                : `Install into ${install.selectedTools.length} tool${install.selectedTools.length === 1 ? "" : "s"}`}
+            </button>
           </div>
         {/if}
       </div>
@@ -546,7 +615,8 @@
     top: 0;
     right: 0;
     bottom: 0;
-    width: min(480px, 90vw);
+    /* width set inline from ui.detailPaneWidth; clamped on resize. */
+    max-width: 90vw;
     display: flex;
     flex-direction: column;
     background: var(--color-surface-raised);
@@ -554,6 +624,15 @@
     box-shadow: var(--shadow-lg, -8px 0 24px rgba(0, 0, 0, 0.18));
     z-index: 41;
     animation: slide-in var(--motion-duration-base, 180ms) var(--motion-ease-out, ease);
+  }
+  /* Full-height drag strip on the panel's left edge. */
+  .pd-resize {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    z-index: 2;
   }
   @keyframes slide-in {
     from { transform: translateX(16px); opacity: 0; }
@@ -739,9 +818,8 @@
   .install-opt {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: var(--space-2);
-    padding: 8px 10px;
+    padding: 7px 10px;
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--color-text-primary);
@@ -749,8 +827,9 @@
     text-align: left;
     cursor: pointer;
   }
-  .install-opt:hover:not(:disabled) { background: var(--color-surface-sunken); }
-  .install-opt:disabled { opacity: 0.45; cursor: default; }
+  .install-opt:hover { background: var(--color-surface-sunken); }
+  .install-opt input { cursor: pointer; accent-color: var(--color-brand); flex: none; }
+  .install-opt .t { flex: 1; }
   .scope-tag {
     font-size: var(--text-caption);
     color: var(--color-text-muted);
@@ -759,4 +838,37 @@
     padding: 0 5px;
   }
   .scope-tag.done { color: var(--color-success); border-color: var(--color-success); }
+  .scope-tag.warn { color: var(--color-warning); border-color: var(--color-warning); }
+  .scope-tag.info { color: var(--color-brand); border-color: var(--color-brand); }
+  .scope-tag.danger { color: var(--color-danger); border-color: var(--color-danger); }
+  .install-go {
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    border-top: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-brand);
+    color: var(--color-text-inverse);
+    font-size: var(--text-body-sm);
+    font-weight: var(--fw-medium);
+    cursor: pointer;
+  }
+  .install-go:hover:not(:disabled) { filter: brightness(1.08); }
+  .install-go:disabled { opacity: 0.5; cursor: default; }
+  .sel-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--color-text-inverse);
+    color: var(--color-brand);
+    font-size: var(--text-caption);
+    font-weight: var(--fw-semibold);
+  }
 </style>

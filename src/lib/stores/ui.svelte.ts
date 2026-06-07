@@ -10,15 +10,27 @@ export const DETAIL_PANE_DEFAULT_WIDTH = 420;
 /** Min allowed width — below this the actions footer crowds up. */
 export const DETAIL_PANE_MIN_WIDTH = 320;
 /** Storage key for the user's preferred pane width. */
-const DETAIL_PANE_WIDTH_KEY = "brew-browser:detail-pane-width";
+const DETAIL_PANE_WIDTH_KEY = "agency-agents:detail-pane-width";
+
+/** Sidebar width bounds (px). Default matches the original fixed 200px. */
+export const SIDEBAR_DEFAULT_WIDTH = 200;
+export const SIDEBAR_MIN_WIDTH = 168;
+export const SIDEBAR_MAX_WIDTH = 360;
+const SIDEBAR_WIDTH_KEY = "agency-agents:sidebar-width";
+
+/** Clamp a sidebar width to its allowed range. */
+export function clampSidebarWidth(w: number): number {
+  if (!Number.isFinite(w)) return SIDEBAR_DEFAULT_WIDTH;
+  return Math.min(Math.max(Math.round(w), SIDEBAR_MIN_WIDTH), SIDEBAR_MAX_WIDTH);
+}
 
 /** Storage keys for Settings-modal preferences (Phase 12b). */
-const DEFAULT_SECTION_KEY = "brew-browser:default-section";
-const VIBRANCY_MATERIAL_KEY = "brew-browser:vibrancy-material";
-const CONFIRM_DESTRUCTIVE_KEY = "brew-browser:confirm-destructive";
-const ACTIVITY_MAX_JOBS_KEY = "brew-browser:activity:max-jobs";
-const ACTIVITY_MAX_LINES_KEY = "brew-browser:activity:max-lines";
-const SIDEBAR_COLLAPSED_KEY = "brew-browser:sidebar-collapsed";
+const DEFAULT_SECTION_KEY = "agency-agents:default-section";
+const VIBRANCY_MATERIAL_KEY = "agency-agents:vibrancy-material";
+const CONFIRM_DESTRUCTIVE_KEY = "agency-agents:confirm-destructive";
+const ACTIVITY_MAX_JOBS_KEY = "agency-agents:activity:max-jobs";
+const ACTIVITY_MAX_LINES_KEY = "agency-agents:activity:max-lines";
+const SIDEBAR_COLLAPSED_KEY = "agency-agents:sidebar-collapsed";
 
 /** Defaults for the Activity-retention settings (Phase 12b). */
 export const ACTIVITY_MAX_JOBS_DEFAULT = 50;
@@ -90,7 +102,7 @@ class UiStore {
   /** Optional initial section to land on when the modal opens. `null`
       means "use the modal's default (Appearance)". Cleared by closeSettings. */
   settingsInitialSection: SettingsSection | null = $state(null);
-  /** About modal — native menu "About brew-browser" + sidebar footer link. */
+  /** About modal — native menu "About Agency Agents" + sidebar footer link. */
   aboutOpen: boolean = $state(false);
   theme: ThemePreference = $state("system");
   /** the package currently shown in the detail panel; null = panel closed */
@@ -124,6 +136,10 @@ class UiStore {
       tooltips on hover. Persisted to localStorage so the choice survives
       app launches. */
   sidebarCollapsed: boolean = $state(false);
+
+  /** Sidebar width in px (when expanded); persisted to localStorage so a
+      resized sidebar survives app launches. */
+  sidebarWidth: number = $state(SIDEBAR_DEFAULT_WIDTH);
 
   setSection(s: SidebarSection) {
     this.section = s;
@@ -284,13 +300,13 @@ class UiStore {
 
   setTheme(t: ThemePreference) {
     this.theme = t;
-    try { localStorage.setItem("brew-browser.theme", t); } catch { /* ignore */ }
+    try { localStorage.setItem("agency-agents.theme", t); } catch { /* ignore */ }
     applyTheme(t);
   }
 
   loadThemeFromStorage() {
     try {
-      const v = localStorage.getItem("brew-browser.theme");
+      const v = localStorage.getItem("agency-agents.theme");
       if (v === "light" || v === "dark" || v === "system") {
         this.theme = v;
       }
@@ -318,6 +334,28 @@ class UiStore {
   /** Reset to default width (used by double-clicking the resize handle). */
   resetDetailPaneWidth() {
     this.setDetailPaneWidth(DETAIL_PANE_DEFAULT_WIDTH);
+  }
+
+  /** Load persisted sidebar width on app mount. */
+  loadSidebarWidthFromStorage() {
+    try {
+      const raw = localStorage.getItem(SIDEBAR_WIDTH_KEY);
+      if (raw != null) {
+        const n = Number(raw);
+        if (Number.isFinite(n)) this.sidebarWidth = clampSidebarWidth(n);
+      }
+    } catch { /* ignore */ }
+  }
+
+  /** Set + persist the sidebar width (clamped to its allowed range). */
+  setSidebarWidth(w: number) {
+    this.sidebarWidth = clampSidebarWidth(w);
+    try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(this.sidebarWidth)); } catch { /* ignore */ }
+  }
+
+  /** Reset to default sidebar width (double-click the resize handle). */
+  resetSidebarWidth() {
+    this.setSidebarWidth(SIDEBAR_DEFAULT_WIDTH);
   }
 }
 

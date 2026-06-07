@@ -245,7 +245,7 @@
            guarantees SR users still get an exit signal when muted. -->
       <div class="console" bind:this={consoleEl} onscroll={onScroll} role="log" aria-live={liveMode} aria-atomic="false">
         {#if !activeJob}
-          <p class="muted">Quiet. brew commands run by brew-browser appear here.</p>
+          <p class="muted">Quiet. Background tasks appear here.</p>
         {:else if activeJob.lines.length === 0}
           <p class="muted">Waiting for output…</p>
         {:else}
@@ -267,9 +267,9 @@
                   type="button"
                   class="report-btn"
                   onclick={() => { void openReportIssueFromJob(activeJob!, activeJob!.label); }}
-                  title="Open a pre-filled GitHub issue against brew-browser with this output"
+                  title="Open a pre-filled GitHub issue against Agency Agents with this output"
                 >
-                  Report to brew-browser
+                  Report to Agency Agents
                 </button>
               {:else if activeJob.status === "canceled"}
                 Stopped. Output above.
@@ -416,7 +416,7 @@
   .footer-line.failed    { color: var(--color-danger);  font-style: normal; }
   .footer-line.canceled  { color: var(--color-console-dim); }
 
-  /* "Report to brew-browser" button — shown only on a failed job. Tone
+  /* "Report to Agency Agents" button — shown only on a failed job. Tone
      matches the danger color of the line itself so the affordance reads
      as paired with the failure summary. */
   .report-btn {

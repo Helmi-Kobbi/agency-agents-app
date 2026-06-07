@@ -49,7 +49,7 @@ import DollarSign from "@lucide/svelte/icons/dollar-sign";
 import FlaskConical from "@lucide/svelte/icons/flask-conical";
 import LifeBuoy from "@lucide/svelte/icons/life-buoy";
 import Megaphone from "@lucide/svelte/icons/megaphone";
-import Plug from "@lucide/svelte/icons/plug";
+import Network from "@lucide/svelte/icons/network";
 import ShieldCheck from "@lucide/svelte/icons/shield-check";
 import Sparkles from "@lucide/svelte/icons/sparkles";
 import Target from "@lucide/svelte/icons/target";
@@ -83,7 +83,7 @@ const ICONS: Record<string, Component> = {
   FlaskConical,
   LifeBuoy,
   Megaphone,
-  Plug,
+  Network,
   ShieldCheck,
   Sparkles,
   Target,

@@ -13,7 +13,8 @@
   import { appVersion } from "$lib/api";
   import { safeOpenUrl } from "$lib/util/url";
 
-  const REPO_URL = "https://github.com/msitarzewski/brew-browser";
+  const REPO_URL = "https://github.com/msitarzewski/agency-agents-app";
+  const CATALOG_URL = "https://github.com/msitarzewski/agency-agents";
 
   let version = $state<string | null>(null);
   let versionError = $state<string | null>(null);
@@ -40,10 +41,19 @@
       <dd>MIT</dd>
     </div>
     <div class="row">
-      <dt>Repository</dt>
+      <dt>App</dt>
       <dd>
         <button class="link" type="button" onclick={() => void safeOpenUrl(REPO_URL)}>
-          <code>github.com/msitarzewski/brew-browser</code>
+          <code>github.com/msitarzewski/agency-agents-app</code>
+          <ExternalLink size={12} />
+        </button>
+      </dd>
+    </div>
+    <div class="row">
+      <dt>Catalog</dt>
+      <dd>
+        <button class="link" type="button" onclick={() => void safeOpenUrl(CATALOG_URL)}>
+          <code>github.com/msitarzewski/agency-agents</code>
           <ExternalLink size={12} />
         </button>
       </dd>
@@ -53,10 +63,10 @@
   <div class="affirm">
     <h3>Zero telemetry. Zero accounts.</h3>
     <p>
-      brew-browser does not collect telemetry. It does not phone home. It does
-      not have user accounts. Every outbound network request is documented in
-      Settings → Network and the README, and only fires when you take an
-      action that requires it.
+      Agency Agents does not collect telemetry. It does not phone home. It does
+      not require an account. Every outbound network request is documented in
+      Settings → Network and only fires when you take an action that needs it —
+      pulling the catalog, reading repo stats, or checking for app updates.
     </p>
   </div>
 </div>

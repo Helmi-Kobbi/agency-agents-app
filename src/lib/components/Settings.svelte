@@ -20,6 +20,7 @@
   import { onMount } from "svelte";
   import X from "@lucide/svelte/icons/x";
   import Paintbrush from "@lucide/svelte/icons/paintbrush";
+  import Library from "@lucide/svelte/icons/library";
   import Globe from "@lucide/svelte/icons/globe";
   import Github from "@lucide/svelte/icons/git-fork";
   import Activity from "@lucide/svelte/icons/activity";
@@ -27,6 +28,7 @@
 
   import { ui } from "$lib/stores/ui.svelte";
   import SettingsSectionAppearance from "./SettingsSectionAppearance.svelte";
+  import SettingsSectionCatalog from "./SettingsSectionCatalog.svelte";
   import SettingsSectionNetwork from "./SettingsSectionNetwork.svelte";
   import SettingsSectionGitHub from "./SettingsSectionGitHub.svelte";
   import SettingsSectionActivity from "./SettingsSectionActivity.svelte";
@@ -41,6 +43,7 @@
 
   const NAV: NavEntry[] = [
     { id: "appearance", label: "Appearance", icon: Paintbrush },
+    { id: "catalog",    label: "Catalog",    icon: Library },
     { id: "network",    label: "Network",    icon: Globe },
     { id: "github",     label: "GitHub",     icon: Github },
     { id: "activity",   label: "Activity",   icon: Activity },
@@ -152,6 +155,8 @@
         </button>
         {#if activeSection === "appearance"}
           <SettingsSectionAppearance />
+        {:else if activeSection === "catalog"}
+          <SettingsSectionCatalog />
         {:else if activeSection === "network"}
           <SettingsSectionNetwork />
         {:else if activeSection === "github"}
