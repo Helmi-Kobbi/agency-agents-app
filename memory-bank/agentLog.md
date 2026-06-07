@@ -106,6 +106,111 @@ EmptyState to accept `children` (agency empty states now render their copy). Sec
 deferred (not blocking): rename BrewError→AppError; agency-ify Settings Network/CaskIcon fields;
 Pill formula/cask tones; brew strings in tokens.css/comments. Next: #1 clone-as-source-of-truth.
 
+2026-06-06 — Adopt→Track SAFETY FIX + #1 slice 1 (dynamic categories) (lead).
+- TRACK (was Adopt): `install/mod.rs` — `track_agent`/`do_track` records provenance in the
+  ledger but WRITES NOTHING (was do_install = re-render + overwrite). Reconcile then shows the
+  tracked file as Current (matches catalog) or Modified (differs) — never clobbered. All writes now
+  back up first: `write_agent_files` gained `backup_dir`; `backup_if_differs` copies prior bytes to
+  `<app_data>/backups/<file>.<stamp>.bak` (outside tool dirs → invisible to the Foreign sweep) before
+  any overwrite, so install/update/restore/import are reversible. New `agent_diff` cmd (+ store
+  `diff()`) returns {onDisk,proposed,differs} for review-before-Update. UI: Foreign "Adopt"→"Track";
+  modified row now "Restore" via backup-aware update; Dashboard "found to adopt"→"found to track".
+  Tests: track_writes_no_file, write_backs_up_existing_differing_file. lib.rs swaps adopt_agent→
+  track_agent + agent_diff.
+- #1 SLICE 1 — categories now parsed from the REPO TOOLING, not hardcoded (Michael: "categories can
+  be parsed from the repo itself, look in the tooling"). `discover_categories(root)` parses the
+  `AGENT_DIRS=( … )` bash array from `<root>/scripts/convert.sh` (→ install.sh → lint-agents.sh),
+  `parse_agent_dirs` is pure/tested; `DEFAULT_CATEGORIES` is the offline fallback. Threaded through
+  resolve_active/build_from_dir/seed_from_baseline/empty_corpus + Corpus.category_order; refresh()
+  reads categories from the tarball's own convert.sh (`categories_from_tarball`) and extract writes
+  scripts/convert.sh into the working copy so launches stay self-describing. Bundled
+  `scripts/convert.sh` into corpus-baseline (ships via existing resource glob).
+  DATA CORRECTION: `integrations/` is convert.sh OUTPUT, not a category → dropped (our list wrongly
+  had it); `strategy/` IS canonical → added. Net: baseline 210→**209** (the lone integrations file
+  backend-architect-with-memory.md is an enrichment artifact, no longer indexed; file still on disk,
+  flagged for possible removal). agency-categories.json: −integrations +strategy(Network icon);
+  categoryIcon.ts −Plug +Network. Existing installs auto-correct via the DEFAULT fallback (their old
+  seeded corpus has no scripts/). Tests updated incl. real-baseline→209, +4 new. Verdict: cargo test
+  271/0; svelte-check 0 err; build GREEN. Next: #1 slices 2–4 (CatalogSource model → detect/provision/
+  pull → first-run modal + Settings). Managed path = ~/.agency-agents (confirmed).
+
+2026-06-06 — #1 slices 2–4: clone-as-source-of-truth (lead). Catalog now has a SOURCE.
+- SLICE 2 — CatalogSource model: `types.rs` enum {Bundled | Managed{path} | UserClone{path,manage}}
+  (serde tag "kind"), persisted to `state/catalog.json`. corpus/mod.rs: load/save_catalog_source +
+  `catalog_root(app_data,source)` resolver. Refactored resolve_active/read_source/refresh to read the
+  RESOLVED root (was hardcoded `<app_data>/corpus`); only Bundled seeds from baseline; refresh refuses
+  a read-only UserClone. Cmds: catalog_source_get/set (set validates path + looks_like_catalog, then
+  rebuilds+swaps the memoized corpus), catalog_configured (catalog.json exists? → first-run gate).
+- SLICE 3 — detect/provision/pull: `detect_catalogs(scan)` always checks ~/.agency-agents, scan=true
+  walks ~/{Software,Projects,git,Developer,code,dev,src} for an agency-agents checkout; returns
+  CatalogCandidate{path,kind,has_git,agent_count}. `provision_managed` = git clone --depth1 (if git on
+  PATH) else snapshot tarball into ~/.agency-agents. `pull_active` = git pull --ff-only (git checkout)
+  else tarball refresh. git via spawn_blocking(std::process). Cmds: catalog_detect,
+  catalog_provision_managed, catalog_pull (all require_network where they hit the net). Factored
+  download_corpus_tarball + rebuild_corpus helpers.
+- SLICE 4 — frontend: `stores/catalog.svelte.ts` (source/configured/detection/busy + load/detect/
+  setSource/useBundled/useClone/provisionManaged/pull, calls corpus.reload() after switches; added
+  corpus.reload()). `CatalogFirstRun.svelte` (first-launch picker: use my clone[Find+folder picker,
+  manage checkbox] / set up ~/.agency-agents / bundled) rendered from +layout when !configured.
+  `SettingsSectionCatalog.svelte` + Settings nav "Catalog" (Library icon) + SettingsSection type:
+  shows source/path/agent-count, Pull latest, switch source, Find/pick clone. +layout loads
+  catalog on mount.
+  Decisions honored: picker-primary + "Find Agency Agents" button; manage-with-permission;
+  managed path ~/.agency-agents; verbs Track/Update. Verdict: cargo test 275/0; svelte-check 0 err;
+  build GREEN. NOT yet visually run by Michael. Deferred refinements: aliases.json (renames),
+  explicit orphan surfacing, symlink-aware reconcile (those were #2/#3 in the old plan; core source
+  switching works). Next: Michael runs it; then #2 Track-all/Update-all, #3 tool-grouped Library IA.
+
+2026-06-06 — Warning purge + AppError rename + Catalog GitHub/sync (lead). Michael flagged
+dead-code warnings on `tauri dev` + asked for repo pull/sync management with GitHub login + diff stats.
+- CLEANUP (0 warnings now): renamed `BrewError`→`AppError` everywhere (412 refs, sed; Rust-only, wire
+  `code` strings unchanged). Pruned dead brew variants (BrewNotFound/BrewExitNonZero/JobNotFound/
+  Canceled/BrewfileNotFound/FeatureDisabled/VulnsNotInstalled) + truncate_head/tail + ~30 dead tests;
+  removed AppState require_enhanced_trending/live_enrichment/vulnerability_scanning + their tests;
+  removed render Tool::supported; removed github resolve_github_homepage (brew-metadata helper) + tests.
+  Kept extract_github_repo (now wired). cargo build 0 warnings; cargo test 245/0.
+- REAL BUG FIXED: `state.rs::resolve_app_data_dir` pushed "brew-browser" → settings.json + github-cache
+  were written to `~/Library/Application Support/brew-browser/` (colliding with the other app), split
+  from corpus/ledger/catalog which use the proper bundle dir. Changed to
+  "com.zerologic.agency-agents-app" so ALL app data unifies. (Existing users: settings/github-cache
+  effectively reset to defaults — acceptable.)
+- FEATURE — Catalog GitHub + sync status: backend `catalog_status` (source, git commit/branch/last-
+  commit/dirty, remote→repo_slug via extract_github_repo, version/fetchedAt, agentCount) +
+  `catalog_check_updates` (git fetch → behind/ahead via rev-list --left-right, `git diff --stat`
+  preview + changedFiles). provision_managed now FULL clone (dropped --depth1) for accurate history.
+  Frontend: catalog store gains status/updateCheck/loadStatus/checkUpdates (refreshed after pull/
+  switch/provision); SettingsSectionCatalog rebuilt to show commit/branch/dirty, "Check for updates"
+  → diffstat + Pull CTA, and a GitHub card (repo stars/forks/issues/last-release via the EXISTING
+  github.getRepoStats; sign-in via github.signIn → global DeviceFlowModal). Reused all existing github
+  infra (auth/device-flow/stats) — no new auth code. svelte-check 0 err; build green.
+  Next: Michael runs it (first-run picker appears once); deferred #1 bits (aliases/orphans/.agency-cache/
+  symlink reconcile); then #2/#3.
+
+2026-06-06 — Settings panel refocus to Agency Agents' lens (lead). Michael: "we're nowhere near
+close :9 look at the setting panel." The whole Settings panel was still a Homebrew control panel.
+Refocused every section to show ONLY what's functional + real for Agency Agents:
+- NETWORK → "Network & Privacy": removed dead brew controls (Cask icon fetching, Trending TTL,
+  Catalog auto-refresh, stale-banner — all non-functional after the brew sweep). Kept the one
+  functional toggle (Offline Mode / paranoid_mode, 19 live refs). Rewrote the outbound-paths
+  disclosure to the REAL hosts: github.com/codeload (catalog clone/pull/snapshot), api.github.com
+  (stats/auth/star), raw/objects.githubusercontent.com (avatars/assets), agency-agents-app.zerologic.com
+  (updates). Kept Updates subsection.
+- APPEARANCE: removed the brew "AI features" enrichment toggle (aiFeaturesEnabled — 0 live agency
+  consumers; gated brew enriched metadata) + its CSS; fixed "launch brew-browser"→"Agency Agents".
+- GITHUB: reframed "stats on package pages"→"repository stats" for the catalog repo; de-brewed copy.
+- ABOUT: rebranded repo links (app + catalog) + zero-telemetry copy to Agency Agents.
+- UPDATES: brew-browser→Agency Agents throughout; updater URL brew-browser.zerologic.com→
+  agency-agents-app.zerologic.com/updater.json.
+- Visible strings elsewhere: reportIssue (issue URL → agency-agents-app, "Report to Agency Agents"),
+  ui.svelte storage key prefix, UpdateIndicator badge, ActivityDrawer empty-state + report button,
+  TitlebarControls donate label, types.ts appError toast messages (no more "Homebrew"/"brew exited").
+  ui localStorage key brew-browser→agency-agents.
+Verified: svelte-check 0 errors (was 3 brew-CSS warnings → now only the pre-existing tsconfig `node`
+note), build green. STILL BREW-NAMED PLUMBING (invisible to user, deferred): types.ts BrewErrorPayload/
+isBrewError/BrewStreamEvent type names + dead codes; reportIssue shell-exit semantics (command/exitCode/
+stderr) that agency never produces; dead frontend Settings fields (caskIconMode etc.) + backend Settings
+struct fields. These are a bounded "frontend brew-plumbing purge" — next.
+
 2026-06-06 — App icon + About rebrand (lead). Built a new app icon from Michael's brain-circuit.svg
 (purple→blue→cyan glyph) composited onto a macOS-style rounded square (rsvg-convert glyph → magick
 rounded-gradient bg + composite): dark + light 1024 masters in docs/icon/agency-icon-{dark,light}-
