@@ -14,6 +14,8 @@
   import DownloadIcon from "@lucide/svelte/icons/download";
   import PlusIcon from "@lucide/svelte/icons/plus";
   import GitCompareIcon from "@lucide/svelte/icons/git-compare";
+  import ChevronDown from "@lucide/svelte/icons/chevron-down";
+  import AlertTriangle from "@lucide/svelte/icons/triangle-alert";
 
   import { onMount } from "svelte";
   import { install } from "$lib/stores/install.svelte";
@@ -94,19 +96,114 @@
   function openDiff(r: InstalledAgent) {
     diffTarget = { slug: r.slug, tool: r.tool, projectPath: r.projectPath, name: r.name };
   }
+
+  // ── Bulk selection ──────────────────────────────────────────────
+  // Rows keyed by `dest` (the unique {#each} key). Reassign the Set on every
+  // change so Svelte 5 reactivity fires reliably.
+  let selected = $state<Set<string>>(new Set());
+  let menuOpen = $state(false);
+  let bulkBusy = $state(false);
+  let confirmDelete = $state(false);
+
+  const allSelected = $derived(rows.length > 0 && selected.size === rows.length);
+  const someSelected = $derived(selected.size > 0 && selected.size < rows.length);
+
+  function toggleRow(dest: string) {
+    const next = new Set(selected);
+    if (next.has(dest)) next.delete(dest);
+    else next.add(dest);
+    selected = next;
+  }
+  function selectAll() {
+    selected = new Set(rows.map((r) => r.dest));
+  }
+  function clearSelection() {
+    selected = new Set();
+  }
+  function toggleAll() {
+    if (allSelected) clearSelection();
+    else selectAll();
+  }
+  // Prune selection when the row set changes (after a reconcile).
+  $effect(() => {
+    const live = new Set(rows.map((r) => r.dest));
+    if ([...selected].some((d) => !live.has(d))) {
+      selected = new Set([...selected].filter((d) => live.has(d)));
+    }
+  });
+
+  function selectedTargets() {
+    return rows
+      .filter((r) => selected.has(r.dest))
+      .map((r) => ({ slug: r.slug, tool: r.tool, projectPath: r.projectPath }));
+  }
+
+  async function runBulk(action: "update" | "track" | "uninstall", verb: string) {
+    const targets = selectedTargets();
+    if (targets.length === 0) return;
+    menuOpen = false;
+    bulkBusy = true;
+    try {
+      const { ok, fail } = await install.bulk(action, targets);
+      if (fail === 0) toast.success(`${verb} ${ok} agent${ok === 1 ? "" : "s"}`);
+      else toast.error(`${verb}: ${ok} ok, ${fail} failed`);
+      clearSelection();
+    } finally {
+      bulkBusy = false;
+    }
+  }
 </script>
 
 <section class="lib">
   <header class="lib-head">
     <div class="lib-titles">
+      {#if rows.length > 0}
+        <input
+          type="checkbox"
+          class="head-check"
+          checked={allSelected}
+          indeterminate={someSelected}
+          onchange={toggleAll}
+          title={allSelected ? "Deselect all" : "Select all"}
+          aria-label="Select all"
+        />
+      {/if}
       <p class="lib-sub">
-        {rows.length} install{rows.length === 1 ? "" : "s"}
-        {#if attention > 0}· <span class="warn">{attention} need attention</span>{/if}
+        {#if selected.size > 0}
+          <span class="sel">{selected.size} selected</span>
+        {:else}
+          {rows.length} install{rows.length === 1 ? "" : "s"}
+          {#if attention > 0}· <span class="warn">{attention} need attention</span>{/if}
+        {/if}
       </p>
     </div>
-    <button class="ghost-btn" onclick={() => install.reconcile()} title="Re-scan">
-      <RefreshIcon size={15} /><span>Rescan</span>
-    </button>
+    <div class="head-actions">
+      {#if selected.size > 0}
+        <div class="bulk-wrap">
+          <button class="ghost-btn" disabled={bulkBusy} onclick={() => (menuOpen = !menuOpen)}>
+            <span>{bulkBusy ? "Working…" : "With selected"}</span>
+            <ChevronDown size={14} />
+          </button>
+          {#if menuOpen}
+            <div class="bulk-menu" role="menu">
+              <button class="bulk-opt" role="menuitem" onclick={() => runBulk("update", "Updated")}>
+                <RefreshIcon size={14} /><span>Update — replace with catalog version</span>
+              </button>
+              <button class="bulk-opt" role="menuitem" onclick={() => runBulk("track", "Tracked")}>
+                <PlusIcon size={14} /><span>Track — keep file, start managing</span>
+              </button>
+              <button class="bulk-opt danger" role="menuitem" onclick={() => { menuOpen = false; confirmDelete = true; }}>
+                <TrashIcon size={14} /><span>Delete — remove files from disk</span>
+              </button>
+            </div>
+          {/if}
+        </div>
+        <button class="ghost-btn" onclick={clearSelection}>Clear</button>
+      {/if}
+      <button class="ghost-btn" onclick={() => install.reconcile()} title="Re-scan">
+        <RefreshIcon size={15} /><span>Rescan</span>
+      </button>
+    </div>
   </header>
 
   {#if rows.length === 0 && scanning}
@@ -121,7 +218,14 @@
     <ul class="rows">
       {#each rows as r (r.dest)}
         {@const busy = install.busy === `${r.slug}:${r.tool}`}
-        <li class="row" class:busy>
+        <li class="row" class:busy class:picked={selected.has(r.dest)}>
+          <input
+            type="checkbox"
+            class="r-check"
+            checked={selected.has(r.dest)}
+            onchange={() => toggleRow(r.dest)}
+            aria-label={`Select ${r.name}`}
+          />
           <span class="r-emoji" aria-hidden="true">{emoji(r.slug)}</span>
           <div class="r-main">
             <span class="r-name">{r.name}</span>
@@ -185,6 +289,24 @@
   />
 {/if}
 
+{#if confirmDelete}
+  <button class="cd-scrim" aria-label="Cancel" onclick={() => (confirmDelete = false)}></button>
+  <div class="cd-box" role="alertdialog" aria-modal="true" aria-label="Confirm delete">
+    <div class="cd-head"><AlertTriangle size={20} /><h2>Delete {selected.size} agent{selected.size === 1 ? "" : "s"}?</h2></div>
+    <p class="cd-body">
+      This <strong>permanently removes the file{selected.size === 1 ? "" : "s"} from disk</strong> —
+      including any installed outside this app (your CLI setup). <strong>There is no undo.</strong>
+    </p>
+    <p class="cd-note">Tip: to swap in the catalog version instead of deleting, use <strong>Update</strong> — it backs your copy up first.</p>
+    <div class="cd-actions">
+      <button class="cd-cancel" onclick={() => (confirmDelete = false)}>Cancel</button>
+      <button class="cd-delete" disabled={bulkBusy} onclick={() => { confirmDelete = false; runBulk("uninstall", "Deleted"); }}>
+        <TrashIcon size={14} /> Delete {selected.size}
+      </button>
+    </div>
+  </div>
+{/if}
+
 <style>
   .lib { display: flex; flex-direction: column; height: 100%; min-height: 0; }
   .lib-head {
@@ -195,8 +317,29 @@
     padding: var(--space-4);
     border-bottom: 1px solid var(--color-border);
   }
+  .lib-titles { display: flex; align-items: center; gap: var(--space-3); }
   .lib-sub { color: var(--color-text-secondary); font-size: var(--text-body-sm); }
   .lib-sub .warn { color: var(--color-warning); font-weight: var(--fw-medium); }
+  .lib-sub .sel { color: var(--color-brand); font-weight: var(--fw-medium); }
+  .head-check, .r-check { accent-color: var(--color-brand); cursor: pointer; width: 15px; height: 15px; flex: none; }
+  .head-actions { display: flex; align-items: center; gap: var(--space-2); }
+  .bulk-wrap { position: relative; }
+  .bulk-menu {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+    min-width: 280px; padding: 4px;
+    background: var(--color-surface-raised); border: 1px solid var(--color-border);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .bulk-opt {
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: 8px 10px; border-radius: var(--radius-sm);
+    background: transparent; color: var(--color-text-primary);
+    font-size: var(--text-body-sm); text-align: left; cursor: pointer;
+  }
+  .bulk-opt:hover { background: var(--color-surface-sunken); }
+  .bulk-opt.danger { color: var(--color-danger); }
+  .bulk-opt.danger:hover { background: color-mix(in srgb, var(--color-danger) 12%, transparent); }
   .ghost-btn {
     display: inline-flex; align-items: center; gap: 6px;
     height: 30px; padding: 0 var(--space-3);
@@ -211,6 +354,8 @@
     padding: var(--space-3); border-radius: var(--radius-md);
   }
   .row:hover { background: var(--color-surface-sunken); }
+  .row.picked { background: color-mix(in srgb, var(--color-brand) 10%, transparent); }
+  .row.picked:hover { background: color-mix(in srgb, var(--color-brand) 16%, transparent); }
   .row.busy { opacity: 0.6; }
   .r-emoji { font-size: 20px; line-height: 1; flex: none; }
   .r-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -229,4 +374,36 @@
   .act:disabled { opacity: 0.5; cursor: default; }
   .act.primary { color: var(--color-brand); border-color: var(--color-brand); }
   .act.danger:hover:not(:disabled) { color: var(--color-danger); border-color: var(--color-danger); }
+
+  /* ── Delete confirmation ── */
+  .cd-scrim {
+    position: fixed; inset: 36px 0 0 0; z-index: 92; border: 0; cursor: default;
+    background: color-mix(in srgb, var(--color-bg) 60%, transparent); backdrop-filter: blur(4px);
+  }
+  .cd-box {
+    position: fixed; z-index: 93; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: min(460px, 92vw); padding: var(--space-5);
+    background: var(--color-surface-raised); border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+    display: flex; flex-direction: column; gap: var(--space-3);
+  }
+  .cd-head { display: flex; align-items: center; gap: var(--space-2); color: var(--color-danger); }
+  .cd-head h2 { font-size: var(--text-h2); font-weight: var(--fw-semibold); color: var(--color-text-primary); }
+  .cd-body { font-size: var(--text-body-sm); color: var(--color-text-secondary); line-height: var(--lh-normal); }
+  .cd-note { font-size: var(--text-caption); color: var(--color-text-muted); }
+  .cd-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-1); }
+  .cd-cancel {
+    height: 32px; padding: 0 var(--space-4); border-radius: var(--radius-md);
+    border: 1px solid var(--color-border); background: transparent;
+    color: var(--color-text-secondary); font-size: var(--text-body-sm); cursor: pointer;
+  }
+  .cd-cancel:hover { color: var(--color-text-primary); background: var(--color-surface-sunken); }
+  .cd-delete {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 32px; padding: 0 var(--space-4); border-radius: var(--radius-md);
+    border: 1px solid var(--color-danger); background: var(--color-danger);
+    color: #fff; font-size: var(--text-body-sm); font-weight: var(--fw-medium); cursor: pointer;
+  }
+  .cd-delete:hover:not(:disabled) { filter: brightness(1.08); }
+  .cd-delete:disabled { opacity: 0.5; cursor: default; }
 </style>

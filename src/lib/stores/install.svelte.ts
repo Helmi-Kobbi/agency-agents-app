@@ -204,6 +204,33 @@ class InstallStore {
     return invoke<AgentDiff>("agent_diff", { slug, tool, projectPath });
   }
 
+  /**
+   * Run one action across many installs with a SINGLE reconcile at the end
+   * (calling install()/update()/etc. in a loop would reconcile per item). Each
+   * target is an existing install row, so project tools already know their dest
+   * — no folder prompts. Returns {ok, fail} counts.
+   */
+  async bulk(
+    action: "update" | "track" | "uninstall",
+    targets: { slug: string; tool: Tool; projectPath: string | null }[],
+  ): Promise<{ ok: number; fail: number }> {
+    const cmd =
+      action === "uninstall" ? "uninstall_agent" : action === "track" ? "track_agent" : "update_agent";
+    let ok = 0;
+    let fail = 0;
+    for (const t of targets) {
+      try {
+        await invoke(cmd, { slug: t.slug, tool: t.tool, projectPath: t.projectPath });
+        ok++;
+      } catch {
+        fail++;
+      }
+    }
+    await this.reconcile();
+    void this.loadTools();
+    return { ok, fail };
+  }
+
   /** Label for a tool id (for view-models that only have the wire value). */
   toolLabel(tool: Tool): string {
     return SUPPORTED_TOOLS.find((t) => t.id === tool)?.label ?? tool;
