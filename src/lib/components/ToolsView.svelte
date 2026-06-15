@@ -119,6 +119,14 @@
     const total = c.current + c.outdated + c.modified + c.foreign + c.removed;
     return { ...c, total };
   }
+  // Catalog coverage: how many distinct catalog agents are deployed (present on
+  // disk, i.e. not "removed") in a tool, vs the whole catalog. Drives the bar.
+  const catalogTotal = $derived(Math.max(corpus.agents.length, 1));
+  function installedCount(toolId: Tool): number {
+    const s = new Set<string>();
+    for (const r of rowsFor(toolId)) if (r.state !== "removed") s.add(r.slug);
+    return s.size;
+  }
 
   const emojiBySlug = $derived(new Map(corpus.agents.map((a) => [a.slug, a.emoji] as const)));
   function emoji(slug: string): string {
@@ -245,6 +253,7 @@
       {#each visibleTools as t (t.tool)}
         {@const h = health(t.tool)}
         {@const ver = install.versionOf(t.tool)}
+        {@const inst = installedCount(t.tool)}
         <li>
           <button class="trow" class:sel={selectedTool === t.tool} class:dim={!t.detected && h.total === 0} onclick={() => (selectedTool = t.tool)}>
             <span class="badge" style="--accent:{toolAccent(t.tool)}">{toolMark(t.label)}</span>
@@ -253,13 +262,10 @@
                 <span class="trow-name">{t.label}</span>
                 <span class="c-dot" class:on={t.detected} title={t.detected ? "Detected" : "Not detected"}></span>
               </span>
-              {#if h.total > 0}
-                <span class="hbar" title="{h.total} installed">
-                  {#each ORDER as s (s)}
-                    {#if h[s] > 0}<span class="hseg" style="flex:{h[s]};background:{STATE_COLOR[s]}"></span>{/if}
-                  {/each}
-                </span>
-              {/if}
+              <span class="hbar" title="{inst} of {catalogTotal} catalog agents installed">
+                <span class="hseg" style="flex:{inst};background:var(--color-success)"></span>
+                <span class="hseg" style="flex:{Math.max(catalogTotal - inst, 0)}"></span>
+              </span>
               <span class="trow-sub">
                 {h.total > 0 ? `${h.total} agent${h.total === 1 ? "" : "s"}` : "No agents"}{#if ver} · <span class="trow-ver" title={ver}>{ver}</span>{/if}
               </span>
