@@ -6,27 +6,8 @@
  */
 
 // =========================================================
-// 2.7 Streaming events (Phase 3 & 4)
-// =========================================================
-
-export type AppStreamEvent =
-  | { kind: "started";  jobId: string; command: string; startedAt: string }
-  | { kind: "stdout";   jobId: string; line: string; ts: string }
-  | { kind: "stderr";   jobId: string; line: string; ts: string }
-  | { kind: "progress"; jobId: string; message: string; percent: number | null }
-  | { kind: "exit";     jobId: string; exitCode: number; success: boolean; durationMs: number }
-  | { kind: "canceled"; jobId: string }
-  | { kind: "error";    jobId: string; error: BrewErrorPayload };
-
-// =========================================================
 // 2.10 Settings (Phase 12d)
 // =========================================================
-
-/**
- * Catalog auto-refresh cadence. Wire-format mirrors the Rust enum
- * `CatalogAutoRefresh` (kebab-case).
- */
-export type CatalogAutoRefresh = "off" | "weekly" | "daily";
 
 /**
  * Legacy icon-fetching mode inherited from the source app. Kept in the
@@ -46,7 +27,6 @@ export interface Settings {
   /** Master switch — when true, every outbound command fails with
       `paranoid_mode_blocked`. */
   paranoidMode: boolean;
-  catalogAutoRefresh: CatalogAutoRefresh;
   catalogStaleBannerDays: number;
   caskIconMode: CaskIconMode;
   trendingTtlMinutes: number;
@@ -81,7 +61,6 @@ export interface Settings {
     doesn't have to render an empty state. */
 export const SETTINGS_DEFAULTS: Settings = {
   paranoidMode: false,
-  catalogAutoRefresh: "off",
   catalogStaleBannerDays: 14,
   caskIconMode: "all",
   trendingTtlMinutes: 60,
@@ -228,7 +207,7 @@ export interface UpdateInfo {
  *     skip-list); UI surfaces the indicator + the install action.
  *
  * `blocked` is **not** a wire variant — Offline Mode surfaces as
- * `BrewError::ParanoidModeBlocked` instead, so the toast routes
+ * `AppError::ParanoidModeBlocked` instead, so the toast routes
  * through the same channel as every other gated call.
  */
 export type UpdateCheckOutcome =
@@ -246,31 +225,24 @@ export type UpdateCheckOutcome =
 // 3.3 Error model
 // =========================================================
 
-export type BrewErrorPayload =
-  | { code: "brew_not_found" }
-  | { code: "brew_exit_non_zero"; command: string; exitCode: number; stderrExcerpt: string; friendlyMessage?: string }
+export type AppErrorPayload =
   | { code: "json_parse";         command: string; message: string; rawExcerpt: string }
   | { code: "io";                 message: string }
   | { code: "network";            url: string; message: string }
   | { code: "http_status";        url: string; status: number }
   | { code: "invalid_argument";   message: string }
-  | { code: "job_not_found";      jobId: string }
-  | { code: "canceled" }
-  | { code: "brewfile_not_found"; id: string }
   | { code: "internal";           message: string }
   | { code: "paranoid_mode_blocked"; feature: string }
-  | { code: "feature_disabled";    feature: string }
   | { code: "github_rate_limited"; resetAt: number }
   | { code: "keychain_unavailable"; message: string }
   | { code: "auth_required" }
   | { code: "scope_required"; scope: string }
   | { code: "hash_mismatch"; expected: string; actual: string }
   | { code: "signature_verification_failed"; message: string }
-  | { code: "downgrade_rejected"; current: string; target: string }
-  | { code: "vulns_not_installed"; installCommand: string };
+  | { code: "downgrade_rejected"; current: string; target: string };
 
-/** Type-narrowing helper: is the thrown value a BrewErrorPayload? */
-export function isBrewError(e: unknown): e is BrewErrorPayload {
+/** Type-narrowing helper: is the thrown value a AppErrorPayload? */
+export function isAppError(e: unknown): e is AppErrorPayload {
   return (
     typeof e === "object" &&
     e !== null &&
@@ -279,24 +251,17 @@ export function isBrewError(e: unknown): e is BrewErrorPayload {
   );
 }
 
-/** Human-readable message for a BrewError. */
-export function brewErrorMessage(e: BrewErrorPayload): string {
+/** Human-readable message for an AppError. */
+export function appErrorMessage(e: AppErrorPayload): string {
   switch (e.code) {
-    case "brew_not_found":      return "A required tool was not found on PATH.";
-    case "brew_exit_non_zero":  return e.friendlyMessage ?? `Command exited ${e.exitCode}: ${e.stderrExcerpt}`;
     case "json_parse":          return `Failed to parse output: ${e.message}`;
     case "io":                  return `I/O error: ${e.message}`;
     case "network":             return `Network error: ${e.message}`;
     case "http_status":         return `HTTP ${e.status} from ${e.url}`;
     case "invalid_argument":    return `Invalid argument: ${e.message}`;
-    case "job_not_found":       return `Job ${e.jobId} not found.`;
-    case "canceled":            return "Operation canceled.";
-    case "brewfile_not_found":  return `"${e.id}" not found.`;
     case "internal":            return `Internal error: ${e.message}`;
     case "paranoid_mode_blocked":
       return `Offline Mode is on — ${e.feature} is blocked. Disable it in Settings → Network.`;
-    case "feature_disabled":
-      return `${e.feature} is disabled. Enable it in Settings → Network.`;
     case "github_rate_limited": {
       const reset = e.resetAt > 0 ? new Date(e.resetAt * 1000).toLocaleTimeString() : "soon";
       return `GitHub API rate limit reached. Resets at ${reset}. Sign in to lift the limit.`;
@@ -313,8 +278,6 @@ export function brewErrorMessage(e: BrewErrorPayload): string {
       return `Update aborted: signature verification failed (${e.message}).`;
     case "downgrade_rejected":
       return `Update refused: ${e.target} is not newer than the installed version (${e.current}).`;
-    case "vulns_not_installed":
-      return `A required subcommand is not installed. Run \`${e.installCommand}\` to enable it.`;
   }
 }
 
@@ -604,24 +567,6 @@ export type SettingsSection =
   | "github"
   | "activity"
   | "about";
-
-/** A job tracked locally on the frontend (status + accumulated lines). */
-export interface ActivityJob {
-  jobId: string;
-  label: string;             // human-friendly: "Installing wget"
-  command: string;
-  startedAt: string;
-  status: "running" | "succeeded" | "failed" | "canceled";
-  lines: ActivityLine[];
-  exitCode?: number;
-  durationMs?: number;
-}
-
-export interface ActivityLine {
-  stream: "stdout" | "stderr";
-  text: string;
-  ts: string;
-}
 
 /** Command-palette item — a verb (action). */
 export type PaletteItem =

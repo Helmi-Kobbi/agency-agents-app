@@ -6,7 +6,6 @@
   import Activity from "@lucide/svelte/icons/activity";
 
   import { ui } from "$lib/stores/ui.svelte";
-  import { activity } from "$lib/stores/activity.svelte";
   import { corpus } from "$lib/stores/corpus.svelte";
   import { install } from "$lib/stores/install.svelte";
   import { shortcut } from "$lib/util/platform";
@@ -32,10 +31,6 @@
   ];
 
   function badge(id: SidebarSection): string | null {
-    if (id === "activity") {
-      const r = activity.runningCount;
-      return r > 0 ? String(r) : null;
-    }
     if (id === "personas") {
       // Surface installs needing attention (outdated/modified/removed/foreign).
       const n = install.installed.filter((i) => i.state !== "current").length;
