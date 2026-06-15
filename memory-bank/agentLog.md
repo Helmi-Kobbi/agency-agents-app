@@ -485,3 +485,51 @@ With `tauri dev` running, iterated on the Tools + Agents panes via screenshots; 
   `category` field/identifiers (`agentsCategory`, `openDivision`, `agent.category`, `agency-categories.json`)
   stay — that's the catalog's frontmatter key.
 - Green throughout: svelte-check 0, cargo 258/0 (macOS + Linux), config validation all-pass.
+
+## 2026-06-15 (later 3) — Dashboard viz overhaul: donuts, division color scheme, cross-platform creds
+Iterating live on the Dashboard "Cross-tool coverage" + division color. All green (svelte 0, cargo 258/0).
+- **CoverageMatrix → coverage-% first** (committed in PR #3): cells shade by `installed ÷ division catalog
+  size` (0–100% per cell), not raw count vs global max.
+- **Then replaced the matrix with `CoverageDonuts.svelte`** (NEW, uncommitted): one donut per tool, sliced by
+  division (segment = agents of that division in that tool), the tool's badge (`toolBadge` mark+accent) in the
+  hole, a shared division legend, LINKED HOVER (hover a slice or legend row → highlights that division across
+  all donuts, dims the rest). Dependency-free SVG arcs (HealthDonut technique). Swapped into AgencyDashboard
+  (CoverageMatrix.svelte kept in tree, unused, for A/B). DONUT SIZING GOTCHA: must set `.cd-chart { flex: none }`
+  (and `.cd-cell`) like HealthDonut's `.hd-chart`, else the flex row resizes donuts unevenly by label length;
+  STROKE=16 R=50 viewBox 120 size 132 is the canonical donut spec.
+- **DIVISION COLOR SCHEME (the big one).** Divisions had NO color (just label+icon). Established a curated
+  18-color palette (approved by Michael) and made it CATALOG METADATA:
+  - **Catalog PR**: `divisions.json` in the agency-agents repo (branch `add-division-metadata`) — slug →
+    {label, icon, color} for all 18 dirs. PR: github.com/msitarzewski/agency-agents/pull/592. Fixes "GIS"
+    (was title-cased "Gis") + covers gis/integrations which had no metadata.
+  - **App reads it**: `src-tauri/data/agency-categories.json` mirrors it (color + the 2 missing divisions);
+    threaded through Rust (`CategoryMetaRow.color`, `category_meta` → 3-tuple, `Category.color`, default
+    `#94A3B8`) and TS (`Category.color`); exposed as **`corpus.colorOf(slug)`**. Charts read THAT (the
+    earlier hardcoded `util/divisionColor.ts` was a stepping stone — now DELETED). `category_meta` test asserts
+    `#3B82F6` for engineering.
+  - Palette (slug→hex): specialized #6366F1, marketing #F97316, engineering #3B82F6, game-development #A855F7,
+    gis #14B8A6, security #EF4444, product #D946EF, sales #10B981, design #EC4899, testing #F59E0B,
+    paid-media #EAB308, project-management #0EA5E9, support #84CC16, spatial-computing #06B6D4, academic
+    #8B5CF6, finance #22C55E, integrations #64748B, strategy #F43F5E.
+- **Dashboard "Coverage by tool" click now selects the tool**: added `ui.toolsSelected: Tool | null` +
+  `ui.openTools(tool)`; ToolsView honors it via an `$effect` (overrides its auto-pick) and keeps it synced on
+  row-click; the dashboard bars call `ui.openTools(t.id)`.
+
+### ⏳ RESUME HERE (queued, NOT done — Michael approved the plan, paused at 90% context)
+1. **Build the catalog-by-division segmented bar** (Michael's mockup: a single full-width proportion bar,
+   segments = divisions colored via `corpus.colorOf`, with leader-line callouts above/below — top row = larger
+   divisions near their segment centers, bottom row = smaller divisions EVENLY spaced with angled dotted
+   leaders to their clustered-right segments; header "Total agents {N} / 100%", footer caption). Plan: new
+   `CatalogByDivision.svelte`, replace the current "Catalog by division" bar-list in `AgencyDashboard.svelte`
+   (the `<ul class="bars scroll">` block ~line 119-133). Data = `corpus.tiles` sorted by count desc; use an
+   SVG overlay (viewBox "0 0 100 H" preserveAspectRatio=none + vector-effect non-scaling-stroke) for leaders,
+   absolutely-positioned HTML label blocks at even x%, segments as `<button>` (openDivision, keyboard-ok).
+2. **Tint the division ICONS with the division color** — the `Division ▾` dropdown menu items in
+   `AgentsWorkspace.svelte` (the `resolveCategoryIcon` usage) and the persona division pill in
+   `PersonaBody.svelte`. Use `corpus.colorOf(slug)` for the icon color.
+3. categoryIcon.ts: gis→"Map", integrations→"Workflow" Lucide names are in the metadata now but NOT imported
+   in `categoryIcon.ts` (it statically imports ~19 icons) → add `Map` + `Workflow` imports + map entries, else
+   they fall back to HelpCircle.
+4. Then: commit the color-scheme batch + push (onto PR #3), and the catalog PR #592 awaits merge.
+- **Uncommitted at checkpoint**: agency-categories.json, corpus/mod.rs, types.rs, AgencyDashboard.svelte,
+  ToolsView.svelte, corpus.svelte.ts, ui.svelte.ts, types.ts, + NEW CoverageDonuts.svelte.

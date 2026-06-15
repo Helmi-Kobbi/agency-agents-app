@@ -34,6 +34,12 @@ deferred. Runbook: `docs/BUILD.md#Release Checklist`; decision in `decisions.md`
 - **UX**: adaptive Uninstall/Delete wording by ownership; OS-style click-outside menu dismiss; Tools detail
   closes when the lens hides the tool; CoverageMatrix shades by **coverage-%** (not raw size).
 - **Terminology**: user-facing **Category → Division** (catalog repo's term); internal `category` field kept.
+- **Dashboard viz (in flight)**: replaced the cross-tool matrix with **CoverageDonuts** (one donut per tool,
+  sliced by division, shared legend, linked hover); established a curated **division color scheme** as catalog
+  metadata (PR github.com/msitarzewski/agency-agents/pull/592 = `divisions.json`) read via `corpus.colorOf`;
+  Dashboard "Coverage by tool" click now selects the tool (`ui.openTools`). **⏳ RESUME HERE**: build the
+  catalog-by-division segmented bar + tint the division icons + add `Map`/`Workflow` imports to
+  `categoryIcon.ts`. See `agentLog.md` 2026-06-15 (later 3) for the full pickup spec.
 - **Green throughout**: svelte-check 0 errors, cargo 258/0 (macOS + Linux), config validation all-pass.
 
 ## ✅ Phase C (2026-06-14) — both red items closed
