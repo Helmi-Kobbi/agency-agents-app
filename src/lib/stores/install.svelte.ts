@@ -15,12 +15,23 @@ import { activity } from "$lib/stores/activity.svelte";
 import { corpus } from "$lib/stores/corpus.svelte";
 import type { AgentDiff, InstalledAgent, InstallRecord, InstallState, Tool, ToolInfo, ToolVersion } from "$lib/types";
 
-/** The tools Phase 2 can install to, with display + scope. Mirrors the Rust
-    `SUPPORTED` set in `install/mod.rs`. Order = install-menu order. */
+/** The tools Phase 2 can install to. Mirrors the Rust `SUPPORTED` set and the
+    `supports_user()`/`supports_project()` capabilities in `render/mod.rs`.
+    Order = install-menu order.
+
+    `scope` is the PRIMARY/display scope (global-first for dual-scope tools);
+    the `supports*` flags drive the "how × where" UI — a tool can deploy
+    user-globally AND/OR into a specific project. Verified per-tool against
+    official docs (June 2026): Cursor is the one project-only tool (its global
+    rules are UI-only); every other supported tool is dual-scope. */
 export interface ToolDef {
   id: Tool;
   label: string;
   scope: "user" | "project";
+  /** Can deploy user-globally (`~/…`). */
+  supportsUser: boolean;
+  /** Can deploy into a specific project (`<project>/…`). */
+  supportsProject: boolean;
 }
 
 // Module-level in-flight guard (NOT a class #private field — those can trip up
@@ -32,13 +43,13 @@ let reconcileInflight: Promise<void> | null = null;
 const INSTALL_SELECTION_KEY = "agency-agents:install-selection";
 
 export const SUPPORTED_TOOLS: ToolDef[] = [
-  { id: "claudeCode", label: "Claude Code", scope: "user" },
-  { id: "codex", label: "Codex", scope: "user" },
-  { id: "geminiCli", label: "Gemini CLI", scope: "user" },
-  { id: "copilot", label: "Copilot", scope: "user" },
-  { id: "qwen", label: "Qwen", scope: "user" },
-  { id: "cursor", label: "Cursor", scope: "project" },
-  { id: "opencode", label: "opencode", scope: "project" },
+  { id: "claudeCode", label: "Claude Code", scope: "user", supportsUser: true, supportsProject: true },
+  { id: "codex", label: "Codex", scope: "user", supportsUser: true, supportsProject: true },
+  { id: "geminiCli", label: "Gemini CLI", scope: "user", supportsUser: true, supportsProject: true },
+  { id: "copilot", label: "Copilot", scope: "user", supportsUser: true, supportsProject: true },
+  { id: "qwen", label: "Qwen", scope: "user", supportsUser: true, supportsProject: true },
+  { id: "cursor", label: "Cursor", scope: "project", supportsUser: false, supportsProject: true },
+  { id: "opencode", label: "opencode", scope: "user", supportsUser: true, supportsProject: true },
 ];
 
 class InstallStore {
@@ -94,7 +105,7 @@ class InstallStore {
     activity.log({
       action: "switch",
       tool,
-      scope: this.scopeOf(tool),
+      scope: this.scopeOf(null),
       outcome: "ok",
       detail: nowSelected ? "added as default target" : "removed as default target",
     });
@@ -193,9 +204,10 @@ class InstallStore {
     return corpus.agents.find((a) => a.slug === slug)?.name;
   }
 
-  /** Deployment scope for a tool (user-global vs project-scoped). */
-  private scopeOf(tool: Tool): "user" | "project" {
-    return SUPPORTED_TOOLS.find((t) => t.id === tool)?.scope ?? "user";
+  /** Deployment scope of an INSTALL — derived from whether it targets a project,
+      not from the tool (tools are dual-scope now). Mirrors Rust `scope_for()`. */
+  private scopeOf(projectPath: string | null): "user" | "project" {
+    return projectPath ? "project" : "user";
   }
 
   async install(slug: string, tool: Tool, projectPath: string | null = null): Promise<InstallRecord> {
@@ -209,7 +221,7 @@ class InstallStore {
         agentSlug: slug,
         agentName: this.agentName(slug),
         tool,
-        scope: this.scopeOf(tool),
+        scope: this.scopeOf(projectPath),
         projectPath: projectPath ?? undefined,
         outcome: "ok",
       });
@@ -220,7 +232,7 @@ class InstallStore {
         agentSlug: slug,
         agentName: this.agentName(slug),
         tool,
-        scope: this.scopeOf(tool),
+        scope: this.scopeOf(projectPath),
         projectPath: projectPath ?? undefined,
         outcome: "error",
         detail: e instanceof Error ? e.message : String(e),
@@ -242,7 +254,7 @@ class InstallStore {
         agentSlug: slug,
         agentName: this.agentName(slug),
         tool,
-        scope: this.scopeOf(tool),
+        scope: this.scopeOf(projectPath),
         projectPath: projectPath ?? undefined,
         outcome: "ok",
       });
@@ -252,7 +264,7 @@ class InstallStore {
         agentSlug: slug,
         agentName: this.agentName(slug),
         tool,
-        scope: this.scopeOf(tool),
+        scope: this.scopeOf(projectPath),
         projectPath: projectPath ?? undefined,
         outcome: "error",
         detail: e instanceof Error ? e.message : String(e),
@@ -274,7 +286,7 @@ class InstallStore {
         agentSlug: slug,
         agentName: this.agentName(slug),
         tool,
-        scope: this.scopeOf(tool),
+        scope: this.scopeOf(projectPath),
         projectPath: projectPath ?? undefined,
         outcome: "ok",
       });
@@ -284,7 +296,7 @@ class InstallStore {
         agentSlug: slug,
         agentName: this.agentName(slug),
         tool,
-        scope: this.scopeOf(tool),
+        scope: this.scopeOf(projectPath),
         projectPath: projectPath ?? undefined,
         outcome: "error",
         detail: e instanceof Error ? e.message : String(e),
@@ -311,7 +323,7 @@ class InstallStore {
         agentSlug: slug,
         agentName: this.agentName(slug),
         tool,
-        scope: this.scopeOf(tool),
+        scope: this.scopeOf(projectPath),
         projectPath: projectPath ?? undefined,
         outcome: "ok",
       });
@@ -321,7 +333,7 @@ class InstallStore {
         agentSlug: slug,
         agentName: this.agentName(slug),
         tool,
-        scope: this.scopeOf(tool),
+        scope: this.scopeOf(projectPath),
         projectPath: projectPath ?? undefined,
         outcome: "error",
         detail: e instanceof Error ? e.message : String(e),

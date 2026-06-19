@@ -29,6 +29,8 @@
   import DeploymentMatrix from "./DeploymentMatrix.svelte";
   import DiffModal from "./DiffModal.svelte";
   import DivisionsLanding from "./DivisionsLanding.svelte";
+  import InstallModal from "./InstallModal.svelte";
+  import DownloadIcon from "@lucide/svelte/icons/download";
 
   import { corpus } from "$lib/stores/corpus.svelte";
   import { install } from "$lib/stores/install.svelte";
@@ -213,8 +215,10 @@
     ui.selectAgent(null);
   }
 
-  // ── Diff modal (opened from the DeploymentMatrix) ──
+  // ── Diff modal (opened from the deployment pills) ──
   let diffTarget = $state<{ slug: string; tool: Tool; projectPath: string | null; name: string } | null>(null);
+  // ── Install modal (the shared destinations × tools grid) for the open agent ──
+  let installOpen = $state(false);
 
   // ── Bulk select (lifted from the old Library, now over the unified list) ──
   let selectMode = $state(false);
@@ -435,6 +439,13 @@
       </div>
       <div class="dp-scroll">
         <PersonaBody agent={panelAgent} loading={detailLoading} onCategory={(slug) => ui.openDivision(slug)}>
+          {#snippet headerAction()}
+            {#if panelAgent}
+              <button class="dp-install" onclick={() => (installOpen = true)}>
+                <DownloadIcon size={14} /> Install…
+              </button>
+            {/if}
+          {/snippet}
           {#snippet deploy()}
             {#if panelAgent}
               <DeploymentMatrix agent={panelAgent} onDiff={(t) => (diffTarget = t)} />
@@ -457,6 +468,10 @@
     name={diffTarget.name}
     onClose={() => (diffTarget = null)}
   />
+{/if}
+
+{#if installOpen && panelAgent}
+  <InstallModal title={`Install ${panelAgent.name}`} agentSlugs={[panelAgent.slug]} onClose={() => (installOpen = false)} />
 {/if}
 
 {#if confirmDelete}
@@ -617,6 +632,13 @@
     color: var(--color-text-muted); background: transparent; cursor: pointer;
   }
   .dp-close:hover { background: var(--color-surface-sunken); color: var(--color-text-primary); }
+  .dp-install {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 30px; padding: 0 12px; border-radius: var(--radius-md);
+    background: var(--color-brand); color: var(--color-text-inverse);
+    font-size: var(--text-body-sm); font-weight: var(--fw-medium); cursor: pointer;
+  }
+  .dp-install:hover { filter: brightness(1.08); }
   .dp-scroll { flex: 1; overflow-y: auto; min-height: 0; }
 
   /* Narrow-window overlay scrim — hidden by default, shown only under the

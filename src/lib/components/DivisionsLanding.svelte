@@ -15,7 +15,7 @@
   import LayersIcon from "@lucide/svelte/icons/layers";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
 
-  import DeployModal from "./DeployModal.svelte";
+  import InstallModal from "./InstallModal.svelte";
   import { corpus } from "$lib/stores/corpus.svelte";
   import { install } from "$lib/stores/install.svelte";
   import { ui } from "$lib/stores/ui.svelte";
@@ -128,7 +128,7 @@
 {#if modalOpen}
   {@const slugs = corpus.agents.filter((a) => selected.has(a.category)).map((a) => a.slug)}
   {@const dTitle = selected.size === 1 ? `Deploy ${corpus.labelOf([...selected][0])}` : `Deploy ${selected.size} divisions`}
-  <DeployModal title={dTitle} agentSlugs={slugs} onClose={() => (modalOpen = false)} />
+  <InstallModal title={dTitle} agentSlugs={slugs} onClose={() => (modalOpen = false)} />
 {/if}
 
 <style>

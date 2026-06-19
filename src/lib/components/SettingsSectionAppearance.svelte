@@ -21,6 +21,7 @@
     { value: "personas", label: "Agents" },
     { value: "tools", label: "Tools" },
     { value: "teams", label: "Teams" },
+    { value: "projects", label: "Projects" },
     { value: "activity", label: "Activity" },
   ];
 

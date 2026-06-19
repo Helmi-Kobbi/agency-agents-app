@@ -24,7 +24,8 @@
     { kind: "command", id: "personas",  label: "Open Agents",    shortcut: shortcut("1"), section: "Nav", run: () => ui.openAgents() },
     { kind: "command", id: "tools",     label: "Open Tools",     shortcut: shortcut("2"), section: "Nav", run: () => ui.setSection("tools") },
     { kind: "command", id: "teams",     label: "Open Teams",     shortcut: shortcut("3"), section: "Nav", run: () => ui.setSection("teams") },
-    { kind: "command", id: "activity",  label: "Open Activity",  shortcut: shortcut("4"), section: "Nav", run: () => ui.setSection("activity") },
+    { kind: "command", id: "projects",  label: "Open Projects",  shortcut: shortcut("4"), section: "Nav", run: () => ui.setSection("projects") },
+    { kind: "command", id: "activity",  label: "Open Activity",  shortcut: shortcut("5"), section: "Nav", run: () => ui.setSection("activity") },
     { kind: "command", id: "drawer",    label: "Toggle Activity drawer", shortcut: shortcut("L"), section: "View", run: () => ui.toggleDrawer() },
   ];
 

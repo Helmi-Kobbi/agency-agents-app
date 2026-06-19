@@ -21,13 +21,16 @@
     agent,
     loading = false,
     deploy,
+    headerAction,
     onCategory,
   }: {
     agent: Agent | null;
     loading?: boolean;
     /** Optional deployment band rendered directly under the name/division,
-        above the vibe + persona body (the DeploymentMatrix). */
+        above the vibe + persona body (the deployment pills). */
     deploy?: Snippet;
+    /** Optional action at the right of the title row (e.g. the Install… button). */
+    headerAction?: Snippet;
     /** When provided, the category ("division") pill becomes a button that
         deep-links to that division. */
     onCategory?: (slug: string) => void;
@@ -57,6 +60,7 @@
         {/if}
       </span>
     </div>
+    {#if headerAction}<div class="pb-action">{@render headerAction()}</div>{/if}
   </header>
 
   {#if deploy}
@@ -87,6 +91,7 @@
 {/if}
 
 <style>
+  .pb-action { margin-left: auto; flex: none; }
   .pb-head {
     display: flex;
     align-items: flex-start;

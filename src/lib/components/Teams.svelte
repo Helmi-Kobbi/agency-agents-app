@@ -18,7 +18,7 @@
   import Modal from "./Modal.svelte";
   import Button from "./Button.svelte";
   import Input from "./Input.svelte";
-  import DeployModal from "./DeployModal.svelte";
+  import InstallModal from "./InstallModal.svelte";
   import UploadIcon from "@lucide/svelte/icons/upload";
   import DownloadIcon from "@lucide/svelte/icons/download";
   import ArchiveIcon from "@lucide/svelte/icons/archive";
@@ -249,7 +249,7 @@
 </section>
 
 {#if deployTarget}
-  <DeployModal title={deployTarget.title} agentSlugs={deployTarget.agents} onClose={() => (deployTarget = null)} />
+  <InstallModal title={deployTarget.title} agentSlugs={deployTarget.agents} onClose={() => (deployTarget = null)} />
 {/if}
 
 {#if saveOpen}

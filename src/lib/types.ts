@@ -543,6 +543,7 @@ export type SidebarSection =
   | "personas"
   | "tools"
   | "teams"
+  | "projects"
   | "activity";
 
 export type ThemePreference = "light" | "dark" | "system";
