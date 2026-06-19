@@ -22,11 +22,43 @@ use crate::error::AppError;
 use crate::types::{Agent, Scope, Tool};
 
 impl Tool {
-    /// User-global (`~/…`) vs project-scoped (`./…`) deployment.
-    pub fn scope(self) -> Scope {
-        match self {
-            Tool::Cursor | Tool::Opencode | Tool::Windsurf | Tool::Aider => Scope::Project,
-            _ => Scope::User,
+    /// Whether this tool can deploy USER-GLOBALLY (`~/…`). Most CLIs read a
+    /// user-level agents dir; Cursor is the exception — its global rules live in
+    /// the Settings UI, with no file path, so it's project-only.
+    pub fn supports_user(self) -> bool {
+        matches!(
+            self,
+            Tool::ClaudeCode
+                | Tool::Codex
+                | Tool::GeminiCli
+                | Tool::Qwen
+                | Tool::Copilot
+                | Tool::Opencode
+        )
+    }
+
+    /// Whether this tool can deploy into a SPECIFIC PROJECT (`<project>/…`).
+    /// All currently-supported tools read a project-level agents dir.
+    pub fn supports_project(self) -> bool {
+        matches!(
+            self,
+            Tool::ClaudeCode
+                | Tool::Codex
+                | Tool::GeminiCli
+                | Tool::Qwen
+                | Tool::Copilot
+                | Tool::Opencode
+                | Tool::Cursor
+        )
+    }
+
+    /// The scope an install lands in, derived from whether a project root was
+    /// chosen — NOT a fixed property of the tool. A project path ⇒ project scope.
+    pub fn scope_for(project_root: Option<&Path>) -> Scope {
+        if project_root.is_some() {
+            Scope::Project
+        } else {
+            Scope::User
         }
     }
 
@@ -242,17 +274,32 @@ pub fn dests(
             message: format!("tool '{}' is project-scoped; a project path is required", tool.id()),
         })
     };
+    // Dual-scope tools whose user and project dirs share the SAME relative path
+    // just re-root it: `~/.claude/agents` ↔ `<project>/.claude/agents`.
+    let rooted = project_root.unwrap_or(home);
     let v = match tool {
-        Tool::ClaudeCode => vec![home.join(".claude/agents").join(format!("{slug}.md"))],
-        Tool::Copilot => vec![
-            home.join(".github/agents").join(format!("{slug}.md")),
-            home.join(".copilot/agents").join(format!("{slug}.md")),
-        ],
-        Tool::Codex => vec![home.join(".codex/agents").join(format!("{slug}.toml"))],
-        Tool::GeminiCli => vec![home.join(".gemini/agents").join(format!("{slug}.md"))],
-        Tool::Qwen => vec![home.join(".qwen/agents").join(format!("{slug}.md"))],
+        Tool::ClaudeCode => vec![rooted.join(".claude/agents").join(format!("{slug}.md"))],
+        Tool::Codex => vec![rooted.join(".codex/agents").join(format!("{slug}.toml"))],
+        Tool::GeminiCli => vec![rooted.join(".gemini/agents").join(format!("{slug}.md"))],
+        Tool::Qwen => vec![rooted.join(".qwen/agents").join(format!("{slug}.md"))],
+        // Dual-scope, but the user and project dirs DIFFER, so branch explicitly.
+        Tool::Opencode => match project_root {
+            Some(p) => vec![p.join(".opencode/agents").join(format!("{slug}.md"))],
+            None => vec![home.join(".config/opencode/agents").join(format!("{slug}.md"))],
+        },
+        // Copilot: project lives in the repo's `.github/agents`; global is the
+        // CLI's `~/.copilot/agents` plus the editor's `~/.github/agents`. NB the
+        // documented extension is `.agent.md`; we keep `.md` here until reconcile's
+        // slug derivation handles double extensions (tracked follow-up).
+        Tool::Copilot => match project_root {
+            Some(p) => vec![p.join(".github/agents").join(format!("{slug}.md"))],
+            None => vec![
+                home.join(".copilot/agents").join(format!("{slug}.md")),
+                home.join(".github/agents").join(format!("{slug}.md")),
+            ],
+        },
+        // Project-only: Cursor's global rules are UI-only (no file path).
         Tool::Cursor => vec![proj()?.join(".cursor/rules").join(format!("{slug}.mdc"))],
-        Tool::Opencode => vec![proj()?.join(".opencode/agents").join(format!("{slug}.md"))],
         Tool::Windsurf | Tool::Aider | Tool::Openclaw | Tool::Antigravity => {
             return Err(unsupported(tool))
         }
@@ -559,10 +606,44 @@ mod tests {
     }
 
     #[test]
-    fn scope_classification() {
-        assert_eq!(Tool::ClaudeCode.scope(), Scope::User);
-        assert_eq!(Tool::Cursor.scope(), Scope::Project);
-        assert_eq!(Tool::Opencode.scope(), Scope::Project);
-        assert_eq!(Tool::Codex.scope(), Scope::User);
+    fn scope_capabilities() {
+        // Dual-scope tools support both global and project; Cursor is project-only.
+        assert!(Tool::ClaudeCode.supports_user() && Tool::ClaudeCode.supports_project());
+        assert!(Tool::Opencode.supports_user() && Tool::Opencode.supports_project());
+        assert!(Tool::Codex.supports_user() && Tool::Codex.supports_project());
+        assert!(!Tool::Cursor.supports_user() && Tool::Cursor.supports_project());
+        // An install's scope comes from whether a project root was chosen.
+        assert_eq!(Tool::scope_for(None), Scope::User);
+        assert_eq!(Tool::scope_for(Some(Path::new("/p"))), Scope::Project);
+    }
+
+    #[test]
+    fn dests_are_scope_aware() {
+        let home = Path::new("/home/u");
+        let proj = Path::new("/work/app");
+        // Root-swap tools: same relative path, rooted at home or the project.
+        assert_eq!(
+            dests(Tool::ClaudeCode, "x", home, None).unwrap()[0],
+            home.join(".claude/agents/x.md")
+        );
+        assert_eq!(
+            dests(Tool::ClaudeCode, "x", home, Some(proj)).unwrap()[0],
+            proj.join(".claude/agents/x.md")
+        );
+        // opencode uses DIFFERENT dirs per scope.
+        assert_eq!(
+            dests(Tool::Opencode, "x", home, None).unwrap()[0],
+            home.join(".config/opencode/agents/x.md")
+        );
+        assert_eq!(
+            dests(Tool::Opencode, "x", home, Some(proj)).unwrap()[0],
+            proj.join(".opencode/agents/x.md")
+        );
+        // Cursor is project-only: a global (no project root) request errors.
+        assert!(dests(Tool::Cursor, "x", home, None).is_err());
+        assert_eq!(
+            dests(Tool::Cursor, "x", home, Some(proj)).unwrap()[0],
+            proj.join(".cursor/rules/x.mdc")
+        );
     }
 }

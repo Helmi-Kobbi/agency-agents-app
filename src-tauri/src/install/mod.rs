@@ -101,7 +101,7 @@ fn record_for(
     InstallRecord {
         slug: agent.slug.clone(),
         tool,
-        scope: tool.scope(),
+        scope: Tool::scope_for(project_root),
         project_path: project_root.map(|p| p.to_string_lossy().to_string()),
         dest: primary_dest.to_string_lossy().to_string(),
         source_hash: source_hash.to_string(),
@@ -697,17 +697,18 @@ pub async fn installs_reconcile(
         .collect();
     let home = home()?;
     for tool in SUPPORTED {
-        let scan_roots: Vec<(Option<String>, PathBuf)> = if tool.scope() == crate::types::Scope::User {
-            agent_dirs(tool, &home, None).into_iter().map(|d| (None, d)).collect()
-        } else {
-            project_dirs
-                .iter()
-                .flat_map(|p| {
-                    let key = Some(p.to_string_lossy().to_string());
-                    agent_dirs(tool, &home, Some(p)).into_iter().map(move |d| (key.clone(), d))
-                })
-                .collect()
-        };
+        // Dual-scope tools are scanned in BOTH places: the user-global dir (key
+        // None) AND every project root the ledger knows about (key Some(path)).
+        let mut scan_roots: Vec<(Option<String>, PathBuf)> = Vec::new();
+        if tool.supports_user() {
+            scan_roots.extend(agent_dirs(tool, &home, None).into_iter().map(|d| (None, d)));
+        }
+        if tool.supports_project() {
+            scan_roots.extend(project_dirs.iter().flat_map(|p| {
+                let key = Some(p.to_string_lossy().to_string());
+                agent_dirs(tool, &home, Some(p)).into_iter().map(move |d| (key.clone(), d))
+            }));
+        }
         for (proj, dir) in scan_roots {
             let mut rd = match tokio::fs::read_dir(&dir).await {
                 Ok(r) => r,
@@ -737,7 +738,7 @@ pub async fn installs_reconcile(
                     slug,
                     name: agent.name.clone(),
                     tool,
-                    scope: tool.scope(),
+                    scope: Tool::scope_for(proj.as_deref().map(std::path::Path::new)),
                     project_path: proj.clone(),
                     dest: path.to_string_lossy().to_string(),
                     state,
@@ -792,7 +793,14 @@ pub async fn tools_list(app: AppHandle) -> Result<Vec<ToolInfo>, AppError> {
             tool,
             label: tool.label().to_string(),
             detected,
-            scope: tool.scope(),
+            // Primary/display scope: dual-scope tools read "user" (global-first);
+            // Cursor is the project-only exception. Per-install scope is derived
+            // from the chosen project root, not this field.
+            scope: if tool.supports_user() {
+                crate::types::Scope::User
+            } else {
+                crate::types::Scope::Project
+            },
             user_dest,
             installed_count,
         });
@@ -1385,7 +1393,7 @@ mod tests {
         let recs = vec![InstallRecord {
             slug: "a".into(),
             tool: Tool::Cursor,
-            scope: Tool::Cursor.scope(),
+            scope: crate::types::Scope::Project,
             project_path: Some("/p".into()),
             dest: "/p/.cursor/rules/a.mdc".into(),
             source_hash: "sh".into(),
