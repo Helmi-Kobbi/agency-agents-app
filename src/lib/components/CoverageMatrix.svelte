@@ -17,14 +17,7 @@
   import { corpus } from "$lib/stores/corpus.svelte";
   import { install, SUPPORTED_TOOLS } from "$lib/stores/install.svelte";
   import { ui } from "$lib/stores/ui.svelte";
-  import type { Tool } from "$lib/types";
-
-  // Short column headers (full label in the tooltip).
-  const SHORT: Record<Tool, string> = {
-    claudeCode: "Claude", codex: "Codex", geminiCli: "Gemini", copilot: "Copilot",
-    qwen: "Qwen", cursor: "Cursor", opencode: "opencode",
-    windsurf: "Windsurf", aider: "Aider", openclaw: "openclaw", antigravity: "antigravity",
-  };
+  import { toolShort } from "$lib/data/toolRegistry";
 
   const slugCat = $derived(new Map(corpus.agents.map((a) => [a.slug, a.category])));
 
@@ -84,7 +77,7 @@
       <div class="cm-cat cm-corner">Division</div>
       {#each data.tools as t (t.id)}
         <div class="cm-th" title={`${t.label} · ${data.toolTotals[t.id] ?? 0} installed`}>
-          <span class="cm-th-l">{SHORT[t.id] ?? t.label}</span>
+          <span class="cm-th-l">{toolShort(t.id)}</span>
           <span class="cm-th-n">{data.toolTotals[t.id] ?? 0}</span>
         </div>
       {/each}

@@ -13,6 +13,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { activity } from "$lib/stores/activity.svelte";
 import { corpus } from "$lib/stores/corpus.svelte";
+import { wiredTools } from "$lib/data/toolRegistry";
 import type { AgentDiff, InstalledAgent, InstallRecord, InstallState, Tool, ToolInfo, ToolVersion } from "$lib/types";
 
 /** The tools Phase 2 can install to. Mirrors the Rust `SUPPORTED` set and the
@@ -42,15 +43,16 @@ let reconcileInflight: Promise<void> | null = null;
 /** Persisted "Install into…" tool selection — remembered across agents/launches. */
 const INSTALL_SELECTION_KEY = "agency-agents:install-selection";
 
-export const SUPPORTED_TOOLS: ToolDef[] = [
-  { id: "claudeCode", label: "Claude Code", scope: "user", supportsUser: true, supportsProject: true },
-  { id: "codex", label: "Codex", scope: "user", supportsUser: true, supportsProject: true },
-  { id: "geminiCli", label: "Gemini CLI", scope: "user", supportsUser: true, supportsProject: true },
-  { id: "copilot", label: "Copilot", scope: "user", supportsUser: true, supportsProject: true },
-  { id: "qwen", label: "Qwen", scope: "user", supportsUser: true, supportsProject: true },
-  { id: "cursor", label: "Cursor", scope: "project", supportsUser: false, supportsProject: true },
-  { id: "opencode", label: "opencode", scope: "user", supportsUser: true, supportsProject: true },
-];
+/** Derived from the tool registry (`src-tauri/data/tools/*.json`) — the wired
+    tools, in registry order. Adding a tool there flows through here; nothing to
+    edit in this file. `scope` = the primary/display scope (user-first). */
+export const SUPPORTED_TOOLS: ToolDef[] = wiredTools().map((t) => ({
+  id: t.id,
+  label: t.label,
+  scope: t.scope?.user ? "user" : "project",
+  supportsUser: t.scope?.user ?? false,
+  supportsProject: t.scope?.project ?? false,
+}));
 
 class InstallStore {
   /** Reconciled cross-tool installs (the Library model). */

@@ -294,18 +294,11 @@ export function appErrorMessage(e: AppErrorPayload): string {
  * (contracts.md §B). Matches the Rust `Tool` enum (`rename_all = "camelCase"`),
  * so multi-word variants are `claudeCode` / `geminiCli` (not snake/kebab).
  */
-export type Tool =
-  | "claudeCode"
-  | "copilot"
-  | "cursor"
-  | "geminiCli"
-  | "codex"
-  | "opencode"
-  | "windsurf"
-  | "aider"
-  | "qwen"
-  | "openclaw"
-  | "antigravity";
+/** A tool id (camelCase). The set of valid ids is data-driven — see the tool
+    registry (`$lib/data/toolRegistry`, backed by `src-tauri/data/tools/*.json`),
+    which is the single source of truth. Kept as a string alias so adding a tool
+    never touches a type union. */
+export type Tool = string;
 
 /** Deployment scope. User-global tools write to fixed `~/…` dests;
     project-scoped tools install into a tracked `projectPath`. */
