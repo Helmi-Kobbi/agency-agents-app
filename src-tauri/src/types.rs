@@ -13,26 +13,13 @@ use serde::{Deserialize, Serialize};
 
 // ---------- Tools & scope ----------
 
-/// An AI coding tool we can deploy an agent into. The 11 variants are
-/// the authoritative install-target set from agency-agents'
-/// `scripts/install.sh` (see contracts.md §B). Serialized as
-/// camelCase strings (e.g. `"claudeCode"`, `"geminiCli"`) so the TS
-/// `Tool` union matches exactly.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
-pub enum Tool {
-    ClaudeCode,
-    Copilot,
-    Cursor,
-    GeminiCli,
-    Codex,
-    Opencode,
-    Windsurf,
-    Aider,
-    Qwen,
-    Openclaw,
-    Antigravity,
-}
+/// An AI coding tool we can deploy an agent into, identified by its camelCase
+/// string id (e.g. `"claudeCode"`, `"geminiCli"`). The id IS the wire value the
+/// TS `Tool` union depends on; the authoritative tool set lives in the embedded
+/// JSON registry (`crate::registry`) — adding a tool is adding a JSON file, not
+/// a Rust variant. Kept as a type alias so every struct field carrying a tool
+/// (`InstalledAgent`, `ToolInfo`, `LoadoutEntry`, …) stays wire-compatible.
+pub type Tool = String;
 
 /// Deployment scope. User-global tools write to fixed `~/…` dests;
 /// project-scoped tools install into a tracked `project_path`.
@@ -347,47 +334,14 @@ pub struct ProjectInfo {
 mod tests {
     use super::*;
 
-    // ---------- Agency Agents: Tool enum ----------
-
-    #[test]
-    fn tool_serializes_camel_case() {
-        // Multi-word variants are the drift risk — pin the exact wire
-        // strings the TS `Tool` union depends on.
-        assert_eq!(
-            serde_json::to_string(&Tool::ClaudeCode).unwrap(),
-            "\"claudeCode\""
-        );
-        assert_eq!(
-            serde_json::to_string(&Tool::GeminiCli).unwrap(),
-            "\"geminiCli\""
-        );
-        assert_eq!(serde_json::to_string(&Tool::Aider).unwrap(), "\"aider\"");
-        assert_eq!(
-            serde_json::to_string(&Tool::Antigravity).unwrap(),
-            "\"antigravity\""
-        );
-    }
-
-    #[test]
-    fn tool_round_trips_all_eleven_variants() {
-        for t in [
-            Tool::ClaudeCode,
-            Tool::Copilot,
-            Tool::Cursor,
-            Tool::GeminiCli,
-            Tool::Codex,
-            Tool::Opencode,
-            Tool::Windsurf,
-            Tool::Aider,
-            Tool::Qwen,
-            Tool::Openclaw,
-            Tool::Antigravity,
-        ] {
-            let s = serde_json::to_string(&t).unwrap();
-            let back: Tool = serde_json::from_str(&s).unwrap();
-            assert_eq!(back, t);
-        }
-    }
+    // ---------- Agency Agents: Tool id ----------
+    //
+    // `Tool` is now a `String` camelCase id sourced from the embedded JSON
+    // registry (which self-tests its id set in `crate::registry`). A tool id is
+    // a plain string, so the former enum-variant serde tests are meaningless;
+    // the wire-value coverage that still matters — that a `tool` field on a DTO
+    // serializes as the exact camelCase string — lives in
+    // `installed_agent_serializes_camel_case_fields` below.
 
     #[test]
     fn scope_and_states_serialize_camel_case() {
@@ -411,7 +365,7 @@ mod tests {
         let a = InstalledAgent {
             slug: "frontend-developer".into(),
             name: "Frontend Developer".into(),
-            tool: Tool::ClaudeCode,
+            tool: "claudeCode".to_string(),
             scope: Scope::User,
             project_path: None,
             dest: "/Users/x/.claude/agents/frontend-developer.md".into(),

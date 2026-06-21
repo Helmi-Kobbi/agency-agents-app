@@ -18,6 +18,7 @@ use tauri::{AppHandle, State};
 
 use crate::corpus;
 use crate::error::AppError;
+use crate::registry;
 use crate::render;
 use crate::state::AppState;
 use crate::types::{
@@ -90,7 +91,7 @@ fn fs_stamp(iso: &str) -> String {
 fn record_for(
     agent: &crate::types::Agent,
     primary_dest: &Path,
-    tool: Tool,
+    tool: &str,
     project_root: Option<&Path>,
     rendered_hash: String,
     source_hash: &str,
@@ -100,8 +101,8 @@ fn record_for(
 ) -> InstallRecord {
     InstallRecord {
         slug: agent.slug.clone(),
-        tool,
-        scope: Tool::scope_for(project_root),
+        tool: tool.to_string(),
+        scope: render::scope_for(project_root),
         project_path: project_root.map(|p| p.to_string_lossy().to_string()),
         dest: primary_dest.to_string_lossy().to_string(),
         source_hash: source_hash.to_string(),
@@ -172,7 +173,7 @@ async fn do_install(
     let record = write_agent_files_to(
         &agent,
         &raw,
-        tool,
+        &tool,
         &home,
         proot.as_deref(),
         Some(&backups),
@@ -218,7 +219,7 @@ async fn do_track(
     let record = track_agent_record(
         &agent,
         &raw,
-        tool,
+        &tool,
         &home,
         proot.as_deref(),
         &entry.source_hash,
@@ -241,7 +242,7 @@ async fn do_track(
 fn track_agent_record(
     agent: &crate::types::Agent,
     raw: &str,
-    tool: Tool,
+    tool: &str,
     home: &Path,
     project_root: Option<&Path>,
     source_hash: &str,
@@ -272,7 +273,7 @@ fn track_agent_record(
 fn candidate_dests(
     agent: &crate::types::Agent,
     raw: &str,
-    tool: Tool,
+    tool: &str,
     home: &Path,
     project_root: Option<&Path>,
 ) -> Result<Vec<PathBuf>, AppError> {
@@ -294,7 +295,7 @@ fn candidate_dests(
 async fn remove_agent_files(
     agent: &crate::types::Agent,
     raw: &str,
-    tool: Tool,
+    tool: &str,
     home: &Path,
     project_root: Option<&Path>,
     ledger_dest: Option<&Path>,
@@ -345,7 +346,7 @@ async fn remove_file_strict(path: &Path) -> Result<(), AppError> {
 async fn write_agent_files(
     agent: &crate::types::Agent,
     raw: &str,
-    tool: Tool,
+    tool: &str,
     home: &Path,
     project_root: Option<&Path>,
     backup_dir: Option<&Path>,
@@ -374,7 +375,7 @@ async fn write_agent_files(
 async fn write_agent_files_to(
     agent: &crate::types::Agent,
     raw: &str,
-    tool: Tool,
+    tool: &str,
     home: &Path,
     project_root: Option<&Path>,
     backup_dir: Option<&Path>,
@@ -445,7 +446,7 @@ fn classify(
 /// for `tool`. Pure (no I/O) so it's unit-testable. When they match, the file
 /// on disk IS this agent verbatim — there's nothing to "adopt"; reconcile can
 /// treat it as `Current` even if we didn't install it.
-fn bytes_match_render(agent: &crate::types::Agent, raw: &str, tool: Tool, file_bytes: &[u8]) -> bool {
+fn bytes_match_render(agent: &crate::types::Agent, raw: &str, tool: &str, file_bytes: &[u8]) -> bool {
     match render::render_with_hash(agent, raw, tool) {
         Ok((_, expected)) => render::sha256_hex(file_bytes) == expected,
         Err(_) => false,
@@ -458,7 +459,7 @@ fn bytes_match_render(agent: &crate::types::Agent, raw: &str, tool: Tool, file_b
 async fn is_canonical_on_disk(
     app: &AppHandle,
     agent: &crate::types::Agent,
-    tool: Tool,
+    tool: &str,
     path: &Path,
 ) -> bool {
     let Ok(raw) = corpus::read_source(app, &agent.category, &agent.slug).await else {
@@ -472,34 +473,27 @@ async fn is_canonical_on_disk(
 
 // ---------- Tool detection ----------
 
-fn detect(tool: Tool, home: &Path) -> (bool, Option<String>) {
-    let agents_dir = |sub: &str| Some(home.join(sub).to_string_lossy().to_string());
-    match tool {
-        Tool::ClaudeCode => (home.join(".claude").exists(), agents_dir(".claude/agents")),
-        Tool::Copilot => (
-            home.join(".github").exists() || home.join(".copilot").exists(),
-            agents_dir(".github/agents"),
-        ),
-        Tool::Codex => (home.join(".codex").exists(), agents_dir(".codex/agents")),
-        Tool::GeminiCli => (home.join(".gemini").exists(), agents_dir(".gemini/agents")),
-        Tool::Qwen => (home.join(".qwen").exists(), agents_dir(".qwen/agents")),
-        // Project-scoped: no single user dir; "detected" by a hint dir if any.
-        Tool::Cursor => (home.join(".cursor").exists(), None),
-        Tool::Opencode => (home.join(".config/opencode").exists(), None),
-        _ => (false, None),
-    }
+fn detect(tool: &str, home: &Path) -> (bool, Option<String>) {
+    // Registry-driven: detected if ANY of the tool's `detect.dirs` exists under
+    // `home`; the agents dir comes from `detect.agentsDir`. Recognized-only tools
+    // (no `detect` block) → (false, None).
+    let Some(det) = registry::get(tool).and_then(|m| m.detect.as_ref()) else {
+        return (false, None);
+    };
+    let detected = det.dirs.iter().any(|d| home.join(d).exists());
+    let agents_dir = det
+        .agents_dir
+        .as_ref()
+        .map(|sub| home.join(sub).to_string_lossy().to_string());
+    (detected, agents_dir)
 }
 
-/// The tools Phase 2 can install to.
-const SUPPORTED: [Tool; 7] = [
-    Tool::ClaudeCode,
-    Tool::Copilot,
-    Tool::Cursor,
-    Tool::Codex,
-    Tool::GeminiCli,
-    Tool::Opencode,
-    Tool::Qwen,
-];
+/// The tools Phase 2 can install to — the wired (installable) registry ids, in
+/// registry order. Sourced from the embedded JSON so adding a tool is adding a
+/// file, not editing this list.
+fn supported() -> Vec<&'static str> {
+    registry::wired().map(|m| m.id.as_str()).collect()
+}
 
 // ---------- Tauri commands ----------
 
@@ -562,7 +556,7 @@ pub async fn agent_diff(
         message: format!("unknown agent: {slug}"),
     })?;
     let raw = corpus::read_source(&app, &agent.category, &slug).await?;
-    let (proposed, _hash) = render::render_with_hash(&agent, &raw, tool)?;
+    let (proposed, _hash) = render::render_with_hash(&agent, &raw, &tool)?;
 
     let home = home()?;
     let proot = project_path.as_ref().map(PathBuf::from);
@@ -571,7 +565,7 @@ pub async fn agent_diff(
         .iter()
         .find(|r| r.slug == slug && r.tool == tool && r.project_path == project_path)
         .map(|r| PathBuf::from(&r.dest));
-    let candidates = candidate_dests(&agent, &raw, tool, &home, proot.as_deref())?;
+    let candidates = candidate_dests(&agent, &raw, &tool, &home, proot.as_deref())?;
     let dest = ledger_dest
         .as_ref()
         .or_else(|| candidates.iter().find(|p| p.exists()))
@@ -616,7 +610,7 @@ pub async fn uninstall_agent(
     remove_agent_files(
         &agent,
         &raw,
-        tool,
+        &tool,
         &home,
         proot.as_deref(),
         ledger_dest.as_deref(),
@@ -668,7 +662,7 @@ pub async fn installs_reconcile(
         out.push(InstalledAgent {
             slug: r.slug.clone(),
             name,
-            tool: r.tool,
+            tool: r.tool.clone(),
             scope: r.scope,
             project_path: r.project_path.clone(),
             dest: r.dest.clone(),
@@ -686,7 +680,7 @@ pub async fn installs_reconcile(
     // tool's dir(s) — user dirs + every project dir in the ledger.
     let ledger_keys: std::collections::HashSet<(String, Tool, Option<String>)> = ledger
         .iter()
-        .map(|r| (r.slug.clone(), r.tool, r.project_path.clone()))
+        .map(|r| (r.slug.clone(), r.tool.clone(), r.project_path.clone()))
         .collect();
     let project_dirs: Vec<PathBuf> = ledger
         .iter()
@@ -696,14 +690,14 @@ pub async fn installs_reconcile(
         .map(PathBuf::from)
         .collect();
     let home = home()?;
-    for tool in SUPPORTED {
+    for tool in supported() {
         // Dual-scope tools are scanned in BOTH places: the user-global dir (key
         // None) AND every project root the ledger knows about (key Some(path)).
         let mut scan_roots: Vec<(Option<String>, PathBuf)> = Vec::new();
-        if tool.supports_user() {
+        if render::supports_user(tool) {
             scan_roots.extend(agent_dirs(tool, &home, None).into_iter().map(|d| (None, d)));
         }
-        if tool.supports_project() {
+        if render::supports_project(tool) {
             scan_roots.extend(project_dirs.iter().flat_map(|p| {
                 let key = Some(p.to_string_lossy().to_string());
                 agent_dirs(tool, &home, Some(p)).into_iter().map(move |d| (key.clone(), d))
@@ -724,7 +718,7 @@ pub async fn installs_reconcile(
                     continue; // unrecognized → not ours to claim
                 };
                 let slug = agent.slug.clone();
-                if ledger_keys.contains(&(slug.clone(), tool, proj.clone())) {
+                if ledger_keys.contains(&(slug.clone(), tool.to_string(), proj.clone())) {
                     continue; // already in the ledger
                 }
                 // Byte-identical to the catalog ⇒ in sync ⇒ Current. Otherwise a
@@ -737,8 +731,8 @@ pub async fn installs_reconcile(
                 out.push(InstalledAgent {
                     slug,
                     name: agent.name.clone(),
-                    tool,
-                    scope: Tool::scope_for(proj.as_deref().map(std::path::Path::new)),
+                    tool: tool.to_string(),
+                    scope: render::scope_for(proj.as_deref().map(std::path::Path::new)),
                     project_path: proj.clone(),
                     dest: path.to_string_lossy().to_string(),
                     state,
@@ -753,14 +747,14 @@ pub async fn installs_reconcile(
     // same agent twice; other tools could too. One logical install = one row
     // (its Track/Update/Remove already cover every physical dest).
     let mut seen = std::collections::HashSet::new();
-    out.retain(|a| seen.insert((a.slug.clone(), a.tool, a.project_path.clone())));
+    out.retain(|a| seen.insert((a.slug.clone(), a.tool.clone(), a.project_path.clone())));
 
     Ok(out)
 }
 
 /// The directory/directories a tool writes agent files into (parents of the
 /// per-agent dests). Used by the Foreign sweep.
-fn agent_dirs(tool: Tool, home: &Path, project_root: Option<&Path>) -> Vec<PathBuf> {
+fn agent_dirs(tool: &str, home: &Path, project_root: Option<&Path>) -> Vec<PathBuf> {
     render::dests(tool, "_probe", home, project_root)
         .unwrap_or_default()
         .into_iter()
@@ -785,18 +779,19 @@ pub async fn installs_for_agent(
 pub async fn tools_list(app: AppHandle) -> Result<Vec<ToolInfo>, AppError> {
     let ledger = load_ledger(&app).await?;
     let home = home()?;
-    let mut out = Vec::with_capacity(SUPPORTED.len());
-    for tool in SUPPORTED {
+    let supported = supported();
+    let mut out = Vec::with_capacity(supported.len());
+    for tool in supported {
         let installed_count = ledger.iter().filter(|r| r.tool == tool).count() as u32;
         let (detected, user_dest) = detect(tool, &home);
         out.push(ToolInfo {
-            tool,
-            label: tool.label().to_string(),
+            tool: tool.to_string(),
+            label: render::label(tool),
             detected,
             // Primary/display scope: dual-scope tools read "user" (global-first);
             // Cursor is the project-only exception. Per-install scope is derived
             // from the chosen project root, not this field.
-            scope: if tool.supports_user() {
+            scope: if render::supports_user(tool) {
                 crate::types::Scope::User
             } else {
                 crate::types::Scope::Project
@@ -836,17 +831,11 @@ pub async fn reveal_path(path: String) -> Result<(), AppError> {
 
 /// The `<bin> --version`-style probe command for a tool, or `None` when we don't
 /// know one. Best-effort and uneven by nature — GUI tools may not ship a CLI.
-fn version_cmd(tool: Tool) -> Option<(&'static str, &'static [&'static str])> {
-    match tool {
-        Tool::ClaudeCode => Some(("claude", &["--version"])),
-        Tool::Codex => Some(("codex", &["--version"])),
-        Tool::GeminiCli => Some(("gemini", &["--version"])),
-        Tool::Qwen => Some(("qwen", &["--version"])),
-        Tool::Opencode => Some(("opencode", &["--version"])),
-        Tool::Cursor => Some(("cursor", &["--version"])),
-        Tool::Copilot => Some(("gh", &["copilot", "--version"])),
-        _ => None,
-    }
+fn version_cmd(tool: &str) -> Option<(&'static str, Vec<&'static str>)> {
+    // The registry is cached for the process lifetime (`OnceLock`), so its
+    // `&str`s are effectively `'static` — fine to hand to the version probe.
+    let v = registry::get(tool)?.version.as_ref()?;
+    Some((v.bin.as_str(), v.args.iter().map(String::as_str).collect()))
 }
 
 /// First non-empty trimmed line of version output, capped to a sane length.
@@ -857,7 +846,7 @@ fn first_version_line(s: &str) -> Option<String> {
     })
 }
 
-async fn probe_version(tool: Tool) -> Option<String> {
+async fn probe_version(tool: &str) -> Option<String> {
     let (bin, args) = version_cmd(tool)?;
     let fut = tokio::process::Command::new(bin).args(args).output();
     match tokio::time::timeout(std::time::Duration::from_secs(3), fut).await {
@@ -872,11 +861,12 @@ async fn probe_version(tool: Tool) -> Option<String> {
 /// version command) comes back as `version: None` — the UI just omits it.
 #[tauri::command]
 pub async fn tool_versions() -> Result<Vec<ToolVersion>, AppError> {
-    let mut handles = Vec::with_capacity(SUPPORTED.len());
-    for tool in SUPPORTED {
+    let supported = supported();
+    let mut handles = Vec::with_capacity(supported.len());
+    for tool in supported {
         handles.push(tokio::spawn(
             async move { ToolVersion {
-                tool,
+                tool: tool.to_string(),
                 version: probe_version(tool).await,
             } },
         ));
@@ -941,7 +931,7 @@ pub async fn loadout_export(app: AppHandle, path: String) -> Result<u32, AppErro
         .iter()
         .map(|r| LoadoutEntry {
             slug: r.slug.clone(),
-            tool: r.tool,
+            tool: r.tool.clone(),
             project_path: r.project_path.clone(),
         })
         .collect();
@@ -985,10 +975,10 @@ mod tests {
         let af = Agentfile {
             agentfile: 1,
             installs: vec![
-                LoadoutEntry { slug: "a".into(), tool: Tool::ClaudeCode, project_path: None },
+                LoadoutEntry { slug: "a".into(), tool: "claudeCode".to_string(), project_path: None },
                 LoadoutEntry {
                     slug: "b".into(),
-                    tool: Tool::Cursor,
+                    tool: "cursor".to_string(),
                     project_path: Some("/proj".into()),
                 },
             ],
@@ -998,7 +988,7 @@ mod tests {
         assert!(s.contains("\"claudeCode\"") && s.contains("\"projectPath\":\"/proj\""));
         let back: Agentfile = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(back.installs.len(), 2);
-        assert_eq!(back.installs[1].tool, Tool::Cursor);
+        assert_eq!(back.installs[1].tool, "cursor");
     }
 
     #[test]
@@ -1037,7 +1027,7 @@ mod tests {
 
         // Codex (user-scoped, TOML transform).
         let rec = write_agent_files(
-            &agent, raw, Tool::Codex, home.path(), None, None, "src-1", "body-1", "v1",
+            &agent, raw, "codex", home.path(), None, None, "src-1", "body-1", "v1",
             "2026-06-05T00:00:00Z",
         )
         .await
@@ -1076,7 +1066,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let raw = "---\nname: Frontend Developer\ncolor: blue\n---\nVERBATIM BODY\n";
         write_agent_files(
-            &sample_agent(), raw, Tool::ClaudeCode, home.path(), None, None, "s", "b", "v", "t",
+            &sample_agent(), raw, "claudeCode", home.path(), None, None, "s", "b", "v", "t",
         )
         .await
         .unwrap();
@@ -1089,7 +1079,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let proj = tempfile::tempdir().unwrap();
         let rec = write_agent_files(
-            &sample_agent(), "raw", Tool::Cursor, home.path(), Some(proj.path()), None, "s", "b", "v", "t",
+            &sample_agent(), "raw", "cursor", home.path(), Some(proj.path()), None, "s", "b", "v", "t",
         )
         .await
         .unwrap();
@@ -1105,13 +1095,13 @@ mod tests {
         let agent = sample_agent();
         let raw = "---\nname: Frontend Developer\ncolor: blue\n---\nBODY\n";
         // The exact canonical render matches…
-        let (rendered, _h) = render::render_with_hash(&agent, raw, Tool::Codex).unwrap();
-        assert!(bytes_match_render(&agent, raw, Tool::Codex, rendered.as_bytes()));
+        let (rendered, _h) = render::render_with_hash(&agent, raw, "codex").unwrap();
+        assert!(bytes_match_render(&agent, raw, "codex", rendered.as_bytes()));
         // …a hand-edited / different file does not.
-        assert!(!bytes_match_render(&agent, raw, Tool::Codex, b"different bytes"));
+        assert!(!bytes_match_render(&agent, raw, "codex", b"different bytes"));
         // Identity tool (claude-code ships the source verbatim) also matches.
-        let (raw_render, _h2) = render::render_with_hash(&agent, raw, Tool::ClaudeCode).unwrap();
-        assert!(bytes_match_render(&agent, raw, Tool::ClaudeCode, raw_render.as_bytes()));
+        let (raw_render, _h2) = render::render_with_hash(&agent, raw, "claudeCode").unwrap();
+        assert!(bytes_match_render(&agent, raw, "claudeCode", raw_render.as_bytes()));
     }
 
     /// Track records provenance but must NOT create or touch any file.
@@ -1122,7 +1112,7 @@ mod tests {
         let raw = "---\nname: Frontend Developer\n---\nBODY\n";
 
         let rec = track_agent_record(
-            &agent, raw, Tool::Codex, home.path(), None, "src-1", "body-1", "v1",
+            &agent, raw, "codex", home.path(), None, "src-1", "body-1", "v1",
             "2026-06-06T00:00:00Z",
         )
         .unwrap();
@@ -1133,7 +1123,7 @@ mod tests {
 
         // The recorded rendered_hash equals a real render — so if the user's file
         // happens to match it, reconcile yields Current; otherwise Modified.
-        let (_b, render_hash) = render::render_with_hash(&agent, raw, Tool::Codex).unwrap();
+        let (_b, render_hash) = render::render_with_hash(&agent, raw, "codex").unwrap();
         assert_eq!(rec.rendered_hash, render_hash);
         assert_eq!(
             classify(Some(&render_hash), &rec.rendered_hash, &rec.source_hash, Some("src-1")),
@@ -1161,7 +1151,7 @@ mod tests {
         let tracked = track_agent_record(
             &agent,
             raw,
-            Tool::Codex,
+            "codex",
             home.path(),
             None,
             "src-1",
@@ -1175,7 +1165,7 @@ mod tests {
         write_agent_files_to(
             &agent,
             raw,
-            Tool::Codex,
+            "codex",
             home.path(),
             None,
             Some(backups.path()),
@@ -1190,7 +1180,7 @@ mod tests {
 
         assert_eq!(
             std::fs::read_to_string(&conversion_dest).unwrap(),
-            render::render(&agent, raw, Tool::Codex).unwrap()
+            render::render(&agent, raw, "codex").unwrap()
         );
         assert!(
             !home
@@ -1216,7 +1206,7 @@ mod tests {
 
         // Update over it (with backups enabled).
         write_agent_files(
-            &agent, "---\nname: Frontend Developer\n---\nNEW\n", Tool::Codex, home.path(),
+            &agent, "---\nname: Frontend Developer\n---\nNEW\n", "codex", home.path(),
             None, Some(backups.path()), "src-2", "body-2", "v2", "2026-06-06T01:02:03Z",
         )
         .await
@@ -1234,7 +1224,7 @@ mod tests {
         // A second, byte-identical write makes no new backup (not destructive).
         let before = std::fs::read(&dest).unwrap();
         write_agent_files(
-            &agent, "---\nname: Frontend Developer\n---\nNEW\n", Tool::Codex, home.path(),
+            &agent, "---\nname: Frontend Developer\n---\nNEW\n", "codex", home.path(),
             None, Some(backups.path()), "src-2", "body-2", "v2", "2026-06-06T02:02:03Z",
         )
         .await
@@ -1253,12 +1243,12 @@ mod tests {
         let raw = "---\nname: Frontend Developer\ndescription: Builds UIs.\n---\nBODY\n";
         let dest = home.path().join(".codex/agents/frontend-developer.toml");
         std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
-        std::fs::write(&dest, render::render(&agent, raw, Tool::Codex).unwrap()).unwrap();
+        std::fs::write(&dest, render::render(&agent, raw, "codex").unwrap()).unwrap();
 
         remove_agent_files(
             &agent,
             raw,
-            Tool::Codex,
+            "codex",
             home.path(),
             None,
             None,
@@ -1285,7 +1275,7 @@ mod tests {
         remove_agent_files(
             &agent,
             raw,
-            Tool::Codex,
+            "codex",
             home.path(),
             None,
             None,
@@ -1310,7 +1300,7 @@ mod tests {
         remove_agent_files(
             &sample_agent(),
             "---\nname: Frontend Developer\n---\nBODY\n",
-            Tool::Codex,
+            "codex",
             home.path(),
             None,
             None,
@@ -1327,7 +1317,7 @@ mod tests {
         let backups = tempfile::tempdir().unwrap();
         let agent = sample_agent();
         let raw = "---\nname: Frontend Developer\n---\nBODY\n";
-        for dest in render::dests(Tool::Copilot, &agent.slug, home.path(), None).unwrap() {
+        for dest in render::dests("copilot", &agent.slug, home.path(), None).unwrap() {
             std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
             std::fs::write(dest, raw).unwrap();
         }
@@ -1335,7 +1325,7 @@ mod tests {
         remove_agent_files(
             &agent,
             raw,
-            Tool::Copilot,
+            "copilot",
             home.path(),
             None,
             None,
@@ -1345,7 +1335,7 @@ mod tests {
         .await
         .unwrap();
 
-        for dest in render::dests(Tool::Copilot, &agent.slug, home.path(), None).unwrap() {
+        for dest in render::dests("copilot", &agent.slug, home.path(), None).unwrap() {
             assert!(!dest.exists());
         }
     }
@@ -1366,7 +1356,7 @@ mod tests {
             remove_agent_files(
                 &agent,
                 raw,
-                Tool::Codex,
+                "codex",
                 home.path(),
                 None,
                 None,
@@ -1392,7 +1382,7 @@ mod tests {
     fn ledger_json_roundtrips() {
         let recs = vec![InstallRecord {
             slug: "a".into(),
-            tool: Tool::Cursor,
+            tool: "cursor".to_string(),
             scope: crate::types::Scope::Project,
             project_path: Some("/p".into()),
             dest: "/p/.cursor/rules/a.mdc".into(),
@@ -1407,6 +1397,6 @@ mod tests {
         assert!(String::from_utf8_lossy(&bytes).contains("\"cursor\""));
         let back: Vec<InstallRecord> = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(back.len(), 1);
-        assert_eq!(back[0].tool, Tool::Cursor);
+        assert_eq!(back[0].tool, "cursor");
     }
 }

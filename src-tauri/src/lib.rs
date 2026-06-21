@@ -9,6 +9,7 @@ mod corpus;
 mod error;
 mod github;
 mod install;
+mod registry;
 mod render;
 mod state;
 mod types;

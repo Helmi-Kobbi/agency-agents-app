@@ -19,82 +19,39 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
-use crate::types::{Agent, Scope, Tool};
+use crate::registry;
+use crate::types::{Agent, Scope};
 
-impl Tool {
-    /// Whether this tool can deploy USER-GLOBALLY (`~/…`). Most CLIs read a
-    /// user-level agents dir; Cursor is the exception — its global rules live in
-    /// the Settings UI, with no file path, so it's project-only.
-    pub fn supports_user(self) -> bool {
-        matches!(
-            self,
-            Tool::ClaudeCode
-                | Tool::Codex
-                | Tool::GeminiCli
-                | Tool::Qwen
-                | Tool::Copilot
-                | Tool::Opencode
-        )
-    }
+/// Whether `tool` can deploy USER-GLOBALLY (`~/…`). Most CLIs read a user-level
+/// agents dir; Cursor is the exception — its global rules live in the Settings
+/// UI, with no file path, so it's project-only. Sourced from the registry's
+/// `scope` caps. Unknown ids → false.
+pub fn supports_user(tool: &str) -> bool {
+    registry::get(tool).is_some_and(|m| m.supports_user())
+}
 
-    /// Whether this tool can deploy into a SPECIFIC PROJECT (`<project>/…`).
-    /// All currently-supported tools read a project-level agents dir.
-    pub fn supports_project(self) -> bool {
-        matches!(
-            self,
-            Tool::ClaudeCode
-                | Tool::Codex
-                | Tool::GeminiCli
-                | Tool::Qwen
-                | Tool::Copilot
-                | Tool::Opencode
-                | Tool::Cursor
-        )
-    }
+/// Whether `tool` can deploy into a SPECIFIC PROJECT (`<project>/…`). Sourced
+/// from the registry's `scope` caps. Unknown ids → false.
+pub fn supports_project(tool: &str) -> bool {
+    registry::get(tool).is_some_and(|m| m.supports_project())
+}
 
-    /// The scope an install lands in, derived from whether a project root was
-    /// chosen — NOT a fixed property of the tool. A project path ⇒ project scope.
-    pub fn scope_for(project_root: Option<&Path>) -> Scope {
-        if project_root.is_some() {
-            Scope::Project
-        } else {
-            Scope::User
-        }
+/// The scope an install lands in, derived from whether a project root was
+/// chosen — NOT a fixed property of the tool. A project path ⇒ project scope.
+pub fn scope_for(project_root: Option<&Path>) -> Scope {
+    if project_root.is_some() {
+        Scope::Project
+    } else {
+        Scope::User
     }
+}
 
-    /// kebab id, matching `scripts/install.sh` tool names.
-    pub fn id(self) -> &'static str {
-        match self {
-            Tool::ClaudeCode => "claude-code",
-            Tool::Copilot => "copilot",
-            Tool::Cursor => "cursor",
-            Tool::GeminiCli => "gemini-cli",
-            Tool::Codex => "codex",
-            Tool::Opencode => "opencode",
-            Tool::Windsurf => "windsurf",
-            Tool::Aider => "aider",
-            Tool::Qwen => "qwen",
-            Tool::Openclaw => "openclaw",
-            Tool::Antigravity => "antigravity",
-        }
-    }
-
-    /// Human label for the UI.
-    pub fn label(self) -> &'static str {
-        match self {
-            Tool::ClaudeCode => "Claude Code",
-            Tool::Copilot => "GitHub Copilot",
-            Tool::Cursor => "Cursor",
-            Tool::GeminiCli => "Gemini CLI",
-            Tool::Codex => "Codex",
-            Tool::Opencode => "opencode",
-            Tool::Windsurf => "Windsurf",
-            Tool::Aider => "Aider",
-            Tool::Qwen => "Qwen Code",
-            Tool::Openclaw => "OpenClaw",
-            Tool::Antigravity => "Antigravity",
-        }
-    }
+/// Human label for the UI, from the registry. Falls back to the raw id for an
+/// unknown tool so callers always get a printable string.
+pub fn label(tool: &str) -> String {
+    registry::get(tool)
+        .map(|m| m.label.clone())
+        .unwrap_or_else(|| tool.to_string())
 }
 
 /// SHA-256, lowercase hex — the canonical hash for the ledger + reconcile.
@@ -174,41 +131,51 @@ pub fn slugify(value: &str) -> String {
 
 /// Filename stem emitted by `convert.sh`. Identity tools preserve the source
 /// filename; transform tools derive it from frontmatter `name`.
-pub fn output_slug(agent: &Agent, raw_source: &str, tool: Tool) -> String {
-    match tool {
-        Tool::ClaudeCode | Tool::Copilot => agent.slug.clone(),
-        _ => slugify(source_field(raw_source, "name")),
+pub fn output_slug(agent: &Agent, raw_source: &str, tool: &str) -> String {
+    // Identity tools (`slugFrom: "source"`) keep the corpus filename; transform
+    // tools derive the stem from frontmatter `name`, with an optional namespace
+    // prefix (skill-dir tools share a global folder, so we prefix "agency-").
+    let meta = registry::get(tool);
+    if meta.and_then(|m| m.slug_from.as_deref()) == Some("source") {
+        agent.slug.clone()
+    } else {
+        let prefix = meta.and_then(|m| m.slug_prefix.as_deref()).unwrap_or("");
+        format!("{prefix}{}", slugify(source_field(raw_source, "name")))
     }
 }
 
-fn unsupported(tool: Tool) -> AppError {
+fn unsupported(tool: &str) -> AppError {
+    // Error messages use the kebab id (matching `scripts/install.sh`); fall back
+    // to the raw id for an unrecognized tool.
+    let kebab = registry::get(tool).map(|m| m.kebab.as_str()).unwrap_or(tool);
     AppError::Io {
         message: format!(
-            "tool '{}' is not supported for install yet (multi-file format)",
-            tool.id()
+            "tool '{kebab}' is not supported for install yet (multi-file format)"
         ),
     }
 }
 
 /// Render the file content for `tool` from `agent` (+ the raw corpus `.md`
 /// source, used verbatim by identity tools). Deterministic.
-pub fn render(_agent: &Agent, raw_source: &str, tool: Tool) -> Result<String, AppError> {
+pub fn render(_agent: &Agent, raw_source: &str, tool: &str) -> Result<String, AppError> {
     let name = source_field(raw_source, "name");
     let description = source_field(raw_source, "description");
     let body = source_body(raw_source);
     let slug = slugify(name);
-    let out = match tool {
+    // Dispatch on the registry's render `format` key rather than a Rust variant.
+    let format = registry::get(tool).and_then(|m| m.format.as_deref());
+    let out = match format {
         // Identity — ship the corpus `.md` exactly as authored.
-        Tool::ClaudeCode | Tool::Copilot => raw_source.to_string(),
+        Some("identity") => raw_source.to_string(),
 
         // Cursor `.mdc`: description + globs + alwaysApply frontmatter.
-        Tool::Cursor => format!(
+        Some("cursor-mdc") => format!(
             "---\ndescription: {desc}\nglobs: \"\"\nalwaysApply: false\n---\n{body}\n",
             desc = description,
         ),
 
         // Codex TOML: minimal required fields, control chars escaped.
-        Tool::Codex => format!(
+        Some("codex-toml") => format!(
             "name = \"{name}\"\ndescription = \"{desc}\"\ndeveloper_instructions = \"{body}\"\n",
             name = toml_escape(name),
             desc = toml_escape(description),
@@ -216,13 +183,13 @@ pub fn render(_agent: &Agent, raw_source: &str, tool: Tool) -> Result<String, Ap
         ),
 
         // Gemini CLI subagent `.md`: name(=slug) + description frontmatter.
-        Tool::GeminiCli => format!(
+        Some("gemini-md") => format!(
             "---\nname: {slug}\ndescription: {desc}\n---\n{body}\n",
             desc = description,
         ),
 
         // Qwen Code SubAgent `.md`: optional tools line is preserved literally.
-        Tool::Qwen => {
+        Some("qwen-md") => {
             let tools = source_field(raw_source, "tools");
             if tools.is_empty() {
                 format!("---\nname: {slug}\ndescription: {description}\n---\n{body}\n")
@@ -233,16 +200,27 @@ pub fn render(_agent: &Agent, raw_source: &str, tool: Tool) -> Result<String, Ap
             }
         }
 
+        // Agent-Skills `SKILL.md`: name (namespaced) + description frontmatter,
+        // persona as the body. Mirrors upstream convert.sh `convert_osaurus`
+        // (~/.osaurus/skills/<name>/SKILL.md). The `agency-` prefix on `name`
+        // comes from the tool's `slugPrefix`.
+        Some("skill-md") => {
+            let prefix = registry::get(tool).and_then(|m| m.slug_prefix.as_deref()).unwrap_or("");
+            format!(
+                "---\nname: {prefix}{slug}\ndescription: {desc}\n---\n{body}\n",
+                desc = description,
+            )
+        }
+
         // OpenCode `.md`: name + description + mode + hex color frontmatter.
-        Tool::Opencode => format!(
+        Some("opencode-md") => format!(
             "---\nname: {name}\ndescription: {desc}\nmode: subagent\ncolor: '{color}'\n---\n{body}\n",
             desc = description,
             color = resolve_opencode_color(source_field(raw_source, "color")),
         ),
 
-        Tool::Windsurf | Tool::Aider | Tool::Openclaw | Tool::Antigravity => {
-            return Err(unsupported(tool))
-        }
+        // No format (recognized-only) or an unknown renderer ⇒ not installable.
+        _ => return Err(unsupported(tool)),
     };
     Ok(out)
 }
@@ -251,7 +229,7 @@ pub fn render(_agent: &Agent, raw_source: &str, tool: Tool) -> Result<String, Ap
 pub fn render_with_hash(
     agent: &Agent,
     raw_source: &str,
-    tool: Tool,
+    tool: &str,
 ) -> Result<(String, String), AppError> {
     let bytes = render(agent, raw_source, tool)?;
     let hash = sha256_hex(bytes.as_bytes());
@@ -264,47 +242,41 @@ pub fn render_with_hash(
 /// `home` is the user's home dir (user-scoped tools). `project_root` is required
 /// for project-scoped tools (cursor, opencode) and ignored otherwise.
 pub fn dests(
-    tool: Tool,
+    tool: &str,
     slug: &str,
     home: &Path,
     project_root: Option<&Path>,
 ) -> Result<Vec<PathBuf>, AppError> {
-    let proj = || -> Result<&Path, AppError> {
-        project_root.ok_or_else(|| AppError::Io {
-            message: format!("tool '{}' is project-scoped; a project path is required", tool.id()),
-        })
+    // A tool with no `dest` templates (and no renderer) is recognized-only.
+    let dest = registry::get(tool)
+        .and_then(|m| m.dest.as_ref())
+        .ok_or_else(|| unsupported(tool))?;
+
+    // Pick the scope-appropriate template array + its root. USER paths are rooted
+    // at `$HOME`; PROJECT paths at the project root. Dual-scope same-path tools
+    // (claude/codex/gemini/qwen) just re-root the identical relative template;
+    // tools whose user/project dirs differ (opencode, copilot) carry separate
+    // arrays in the JSON, so this picks the right one.
+    let (templates, root): (&[String], &Path) = match project_root {
+        Some(p) => (&dest.project, p),
+        None => (&dest.user, home),
     };
-    // Dual-scope tools whose user and project dirs share the SAME relative path
-    // just re-root it: `~/.claude/agents` ↔ `<project>/.claude/agents`.
-    let rooted = project_root.unwrap_or(home);
-    let v = match tool {
-        Tool::ClaudeCode => vec![rooted.join(".claude/agents").join(format!("{slug}.md"))],
-        Tool::Codex => vec![rooted.join(".codex/agents").join(format!("{slug}.toml"))],
-        Tool::GeminiCli => vec![rooted.join(".gemini/agents").join(format!("{slug}.md"))],
-        Tool::Qwen => vec![rooted.join(".qwen/agents").join(format!("{slug}.md"))],
-        // Dual-scope, but the user and project dirs DIFFER, so branch explicitly.
-        Tool::Opencode => match project_root {
-            Some(p) => vec![p.join(".opencode/agents").join(format!("{slug}.md"))],
-            None => vec![home.join(".config/opencode/agents").join(format!("{slug}.md"))],
-        },
-        // Copilot: project lives in the repo's `.github/agents`; global is the
-        // CLI's `~/.copilot/agents` plus the editor's `~/.github/agents`. NB the
-        // documented extension is `.agent.md`; we keep `.md` here until reconcile's
-        // slug derivation handles double extensions (tracked follow-up).
-        Tool::Copilot => match project_root {
-            Some(p) => vec![p.join(".github/agents").join(format!("{slug}.md"))],
-            None => vec![
-                home.join(".copilot/agents").join(format!("{slug}.md")),
-                home.join(".github/agents").join(format!("{slug}.md")),
-            ],
-        },
-        // Project-only: Cursor's global rules are UI-only (no file path).
-        Tool::Cursor => vec![proj()?.join(".cursor/rules").join(format!("{slug}.mdc"))],
-        Tool::Windsurf | Tool::Aider | Tool::Openclaw | Tool::Antigravity => {
-            return Err(unsupported(tool))
-        }
-    };
-    Ok(v)
+
+    // An empty array for the requested scope means this tool can't deploy there.
+    // The only such case today is Cursor: project-only, so a user-scoped (no
+    // project root) request must surface the existing "project path required"
+    // error rather than a multi-file `unsupported`.
+    if templates.is_empty() {
+        let kebab = registry::get(tool).map(|m| m.kebab.as_str()).unwrap_or(tool);
+        return Err(AppError::Io {
+            message: format!("tool '{kebab}' is project-scoped; a project path is required"),
+        });
+    }
+
+    Ok(templates
+        .iter()
+        .map(|t| root.join(t.replace("{slug}", slug)))
+        .collect())
 }
 
 /// Map an agency-agents `color` (named or hex) to an OpenCode-safe `#RRGGBB`
@@ -392,13 +364,13 @@ mod tests {
     fn claude_code_is_identity() {
         let a = agent();
         let raw = "---\nname: Frontend Developer\n---\nORIGINAL BODY\n";
-        assert_eq!(render(&a, raw, Tool::ClaudeCode).unwrap(), raw);
-        assert_eq!(render(&a, raw, Tool::Copilot).unwrap(), raw);
+        assert_eq!(render(&a, raw, "claudeCode").unwrap(), raw);
+        assert_eq!(render(&a, raw, "copilot").unwrap(), raw);
     }
 
     #[test]
     fn cursor_mdc_shape() {
-        let out = render(&agent(), raw(), Tool::Cursor).unwrap();
+        let out = render(&agent(), raw(), "cursor").unwrap();
         assert!(out.starts_with("---\ndescription: Builds UIs.\nglobs: \"\"\nalwaysApply: false\n---\n"));
         assert!(out.contains("You are a frontend dev."));
     }
@@ -408,7 +380,7 @@ mod tests {
         let mut a = agent();
         a.description = "has \"quotes\" and\nnewline".into();
         let source = "---\nname: Frontend Developer\ndescription: has \"quotes\" and\tcontrols\n---\nline 1\nline \"2\"\n";
-        let out = render(&a, source, Tool::Codex).unwrap();
+        let out = render(&a, source, "codex").unwrap();
         assert!(out.contains("description = \"has \\\"quotes\\\" and\\tcontrols\""));
         assert!(out.contains("developer_instructions = \"line 1\\nline \\\"2\\\"\""));
         assert!(out.starts_with("name = \"Frontend Developer\""));
@@ -416,9 +388,28 @@ mod tests {
 
     #[test]
     fn opencode_color_maps_to_hex() {
-        let out = render(&agent(), raw(), Tool::Opencode).unwrap();
+        let out = render(&agent(), raw(), "opencode").unwrap();
         assert!(out.contains("color: '#3498DB'"), "blue → #3498DB: {out}");
         assert!(out.contains("mode: subagent"));
+    }
+
+    #[test]
+    fn osaurus_skill_md_shape_and_dest() {
+        // Mirrors upstream convert.sh `convert_osaurus`: a SKILL.md whose `name`
+        // carries the `agency-` namespace prefix, persona as the body.
+        let out = render(&agent(), raw(), "osaurus").unwrap();
+        assert_eq!(
+            out,
+            "---\nname: agency-frontend-developer\ndescription: Builds UIs.\n---\nYou are a frontend dev.\n"
+        );
+        // output_slug carries the prefix → it names the skill directory.
+        assert_eq!(output_slug(&agent(), raw(), "osaurus"), "agency-frontend-developer");
+        // dest is the nested ~/.osaurus/skills/<name>/SKILL.md (user-scope).
+        let d = dests("osaurus", "agency-frontend-developer", Path::new("/home"), None).unwrap();
+        assert_eq!(
+            d,
+            vec![PathBuf::from("/home/.osaurus/skills/agency-frontend-developer/SKILL.md")]
+        );
     }
 
     #[test]
@@ -426,22 +417,22 @@ mod tests {
         let mut a = agent();
         a.color = None;
         let source = "---\nname: Frontend Developer\ndescription: Builds UIs.\n---\nBody\n";
-        let out = render(&a, source, Tool::Opencode).unwrap();
+        let out = render(&a, source, "opencode").unwrap();
         assert!(out.contains("color: '#6B7280'"));
     }
 
     #[test]
     fn gemini_uses_slug_as_name() {
-        let out = render(&agent(), raw(), Tool::GeminiCli).unwrap();
+        let out = render(&agent(), raw(), "geminiCli").unwrap();
         assert!(out.starts_with("---\nname: frontend-developer\ndescription: Builds UIs.\n---\n"));
     }
 
     #[test]
     fn render_is_deterministic() {
-        for tool in [Tool::Cursor, Tool::Codex, Tool::Opencode, Tool::GeminiCli, Tool::Qwen] {
+        for tool in ["cursor", "codex", "opencode", "geminiCli", "qwen"] {
             let a = render(&agent(), raw(), tool).unwrap();
             let b = render(&agent(), raw(), tool).unwrap();
-            assert_eq!(a, b, "{tool:?} must be deterministic");
+            assert_eq!(a, b, "{tool} must be deterministic");
         }
     }
 
@@ -457,10 +448,10 @@ mod tests {
     #[test]
     fn qwen_preserves_optional_tools() {
         let source = "---\nname: Frontend Developer\ndescription: Builds UIs.\ntools: Read, Write\n---\nBody\n";
-        let out = render(&agent(), source, Tool::Qwen).unwrap();
+        let out = render(&agent(), source, "qwen").unwrap();
         assert!(out.contains("\ntools: Read, Write\n"));
 
-        let without = render(&agent(), raw(), Tool::Qwen).unwrap();
+        let without = render(&agent(), raw(), "qwen").unwrap();
         assert!(!without.contains("\ntools: "));
     }
 
@@ -469,10 +460,10 @@ mod tests {
         let mut a = agent();
         a.slug = "engineering-frontend-developer".into();
         assert_eq!(
-            output_slug(&a, raw(), Tool::ClaudeCode),
+            output_slug(&a, raw(), "claudeCode"),
             "engineering-frontend-developer"
         );
-        assert_eq!(output_slug(&a, raw(), Tool::Codex), "frontend-developer");
+        assert_eq!(output_slug(&a, raw(), "codex"), "frontend-developer");
     }
 
     fn collect_markdown(root: &Path, out: &mut Vec<PathBuf>) {
@@ -506,11 +497,11 @@ mod tests {
 
         let temp = tempfile::tempdir().unwrap();
         let tools = [
-            (Tool::Cursor, "cursor/rules", "mdc"),
-            (Tool::Codex, "codex/agents", "toml"),
-            (Tool::GeminiCli, "gemini-cli/agents", "md"),
-            (Tool::Opencode, "opencode/agents", "md"),
-            (Tool::Qwen, "qwen/agents", "md"),
+            ("cursor", "cursor/rules", "mdc"),
+            ("codex", "codex/agents", "toml"),
+            ("geminiCli", "gemini-cli/agents", "md"),
+            ("opencode", "opencode/agents", "md"),
+            ("qwen", "qwen/agents", "md"),
         ];
         for (_, tool_id, _) in tools {
             let tool = tool_id.split('/').next().unwrap();
@@ -548,7 +539,7 @@ mod tests {
                 vibe: None,
                 body: String::new(),
             };
-            let converted_slug = output_slug(&agent, &raw, Tool::Codex);
+            let converted_slug = output_slug(&agent, &raw, "codex");
             assert!(
                 conversion_slugs.insert(converted_slug.clone()),
                 "duplicate conversion slug: {converted_slug}"
@@ -562,7 +553,7 @@ mod tests {
                 assert_eq!(
                     actual.as_bytes(),
                     expected,
-                    "{tool:?} parity mismatch for {}",
+                    "{tool} parity mismatch for {}",
                     path.display()
                 );
                 compared += 1;
@@ -578,7 +569,7 @@ mod tests {
 
     #[test]
     fn unsupported_tools_error() {
-        for tool in [Tool::Windsurf, Tool::Aider, Tool::Openclaw, Tool::Antigravity] {
+        for tool in ["windsurf", "aider", "openclaw", "antigravity"] {
             assert!(render(&agent(), "raw", tool).is_err());
             assert!(dests(tool, "x", Path::new("/home"), Some(Path::new("/p"))).is_err());
         }
@@ -589,32 +580,32 @@ mod tests {
         let home = Path::new("/Users/x");
         let proj = Path::new("/proj");
         assert_eq!(
-            dests(Tool::ClaudeCode, "a", home, None).unwrap(),
+            dests("claudeCode", "a", home, None).unwrap(),
             vec![PathBuf::from("/Users/x/.claude/agents/a.md")]
         );
-        assert_eq!(dests(Tool::Copilot, "a", home, None).unwrap().len(), 2);
+        assert_eq!(dests("copilot", "a", home, None).unwrap().len(), 2);
         assert_eq!(
-            dests(Tool::Codex, "a", home, None).unwrap(),
+            dests("codex", "a", home, None).unwrap(),
             vec![PathBuf::from("/Users/x/.codex/agents/a.toml")]
         );
         assert_eq!(
-            dests(Tool::Cursor, "a", home, Some(proj)).unwrap(),
+            dests("cursor", "a", home, Some(proj)).unwrap(),
             vec![PathBuf::from("/proj/.cursor/rules/a.mdc")]
         );
         // project-scoped without a project path → error
-        assert!(dests(Tool::Cursor, "a", home, None).is_err());
+        assert!(dests("cursor", "a", home, None).is_err());
     }
 
     #[test]
     fn scope_capabilities() {
         // Dual-scope tools support both global and project; Cursor is project-only.
-        assert!(Tool::ClaudeCode.supports_user() && Tool::ClaudeCode.supports_project());
-        assert!(Tool::Opencode.supports_user() && Tool::Opencode.supports_project());
-        assert!(Tool::Codex.supports_user() && Tool::Codex.supports_project());
-        assert!(!Tool::Cursor.supports_user() && Tool::Cursor.supports_project());
+        assert!(supports_user("claudeCode") && supports_project("claudeCode"));
+        assert!(supports_user("opencode") && supports_project("opencode"));
+        assert!(supports_user("codex") && supports_project("codex"));
+        assert!(!supports_user("cursor") && supports_project("cursor"));
         // An install's scope comes from whether a project root was chosen.
-        assert_eq!(Tool::scope_for(None), Scope::User);
-        assert_eq!(Tool::scope_for(Some(Path::new("/p"))), Scope::Project);
+        assert_eq!(scope_for(None), Scope::User);
+        assert_eq!(scope_for(Some(Path::new("/p"))), Scope::Project);
     }
 
     #[test]
@@ -623,26 +614,26 @@ mod tests {
         let proj = Path::new("/work/app");
         // Root-swap tools: same relative path, rooted at home or the project.
         assert_eq!(
-            dests(Tool::ClaudeCode, "x", home, None).unwrap()[0],
+            dests("claudeCode", "x", home, None).unwrap()[0],
             home.join(".claude/agents/x.md")
         );
         assert_eq!(
-            dests(Tool::ClaudeCode, "x", home, Some(proj)).unwrap()[0],
+            dests("claudeCode", "x", home, Some(proj)).unwrap()[0],
             proj.join(".claude/agents/x.md")
         );
         // opencode uses DIFFERENT dirs per scope.
         assert_eq!(
-            dests(Tool::Opencode, "x", home, None).unwrap()[0],
+            dests("opencode", "x", home, None).unwrap()[0],
             home.join(".config/opencode/agents/x.md")
         );
         assert_eq!(
-            dests(Tool::Opencode, "x", home, Some(proj)).unwrap()[0],
+            dests("opencode", "x", home, Some(proj)).unwrap()[0],
             proj.join(".opencode/agents/x.md")
         );
         // Cursor is project-only: a global (no project root) request errors.
-        assert!(dests(Tool::Cursor, "x", home, None).is_err());
+        assert!(dests("cursor", "x", home, None).is_err());
         assert_eq!(
-            dests(Tool::Cursor, "x", home, Some(proj)).unwrap()[0],
+            dests("cursor", "x", home, Some(proj)).unwrap()[0],
             proj.join(".cursor/rules/x.mdc")
         );
     }

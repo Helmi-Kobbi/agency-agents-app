@@ -32,6 +32,10 @@ tauri-plugin-updater = "2"
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Tool registry — embed the `data/tools/*.json` directory at compile time so the
+# backend single-sources tool metadata from the same files the frontend reads.
+# Whole-directory embed (no per-file index) = adding a tool is adding a JSON file.
+include_dir = "0.7"
 tokio = { version = "1", features = ["process", "io-util", "rt-multi-thread", "macros", "sync", "time"] }
 
 # Error handling
