@@ -23,19 +23,24 @@
   import DownloadIcon from "@lucide/svelte/icons/download";
   import ArchiveIcon from "@lucide/svelte/icons/archive";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import SaveIcon from "@lucide/svelte/icons/bookmark-plus";
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import UsersIcon from "@lucide/svelte/icons/users";
   import RocketIcon from "@lucide/svelte/icons/rocket";
 
+  import StarterPrompt from "./StarterPrompt.svelte";
   import { install } from "$lib/stores/install.svelte";
   import { corpus } from "$lib/stores/corpus.svelte";
   import { teams, type SavedTeam } from "$lib/stores/teams.svelte";
   import { toast } from "$lib/stores/toast.svelte";
+  import { ui } from "$lib/stores/ui.svelte";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
   import { PRESET_TEAMS } from "$lib/data/presetTeams";
+  import { TEAM_EXAMPLES } from "$lib/data/playbook";
   import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-  import type { InstalledAgent } from "$lib/types";
+  import type { InstalledAgent, Agent } from "$lib/types";
+  import type { Component } from "svelte";
 
   onMount(() => {
     corpus.ensureLoaded();
@@ -79,6 +84,14 @@
     else next.add(slug);
     collapsed = next;
   }
+  // Division groups are CLOSED by default — seed the collapse set with every
+  // division once the roster first loads.
+  let collapseSeeded = false;
+  $effect(() => {
+    if (collapseSeeded || groups.length === 0) return;
+    collapseSeeded = true;
+    collapsed = new Set(groups.map((g) => g.slug));
+  });
   const allCollapsed = $derived(groups.length > 0 && groups.every((g) => collapsed.has(g.slug)));
   function toggleAll() {
     collapsed = allCollapsed ? new Set() : new Set(groups.map((g) => g.slug));
@@ -89,6 +102,87 @@
   function deploy(title: string, agents: string[]) {
     deployTarget = { title, agents };
   }
+
+  // ── Team detail (master/detail over the presets tab) ──
+  type TeamView = {
+    key: string;
+    label: string;
+    description: string;
+    color: string | null;
+    icon: Component;
+    saved: boolean;
+    agents: string[];
+    examples: string[];
+  };
+  // The opened team is a nav location (ui.teamsSelected) so the system-wide
+  // title-bar back arrow returns to the list — no in-view back button.
+  function openPreset(p: (typeof PRESET_TEAMS)[number]) { tab = "presets"; ui.selectTeam(`preset:${p.slug}`); }
+  function openSaved(t: SavedTeam) { tab = "presets"; ui.selectTeam(`saved:${t.id}`); }
+  const openedTeam = $derived.by<TeamView | null>(() => {
+    const key = ui.teamsSelected;
+    if (!key) return null;
+    if (key.startsWith("preset:")) {
+      const slug = key.slice("preset:".length);
+      const p = PRESET_TEAMS.find((x) => x.slug === slug);
+      return p ? { key, label: p.label, description: p.description, color: p.color, icon: p.icon, saved: false, agents: p.agents, examples: TEAM_EXAMPLES[p.slug] ?? [] } : null;
+    }
+    if (key.startsWith("saved:")) {
+      const id = key.slice("saved:".length);
+      const t = teams.saved.find((x) => x.id === id);
+      return t ? { key, label: t.name, description: `${t.agents.length} agent${t.agents.length === 1 ? "" : "s"} · saved team`, color: null, icon: UsersIcon as unknown as Component, saved: true, agents: t.agents, examples: [] } : null;
+    }
+    return null;
+  });
+
+  // The opened team's agents, grouped by division (disclosures, closed by default).
+  const TOTHER = "__other";
+  const detailGroups = $derived.by(() => {
+    if (!openedTeam) return [];
+    const present = corpus.agents.filter((a) => openedTeam!.agents.includes(a.slug));
+    const m = new Map<string, Agent[]>();
+    for (const a of present) {
+      const d = a.category || TOTHER;
+      const arr = m.get(d);
+      if (arr) arr.push(a);
+      else m.set(d, [a]);
+    }
+    const out = [...m.entries()].map(([slug, rows]) => ({
+      slug,
+      label: slug === TOTHER ? "Other" : corpus.labelOf(slug),
+      color: slug === TOTHER ? "#94A3B8" : corpus.colorOf(slug),
+      icon: slug === TOTHER ? "HelpCircle" : corpus.iconOf(slug),
+      rows: rows.slice().sort((a, b) => a.name.localeCompare(b.name)),
+    }));
+    out.sort((a, b) => (a.slug === TOTHER ? 1 : b.slug === TOTHER ? -1 : a.label.localeCompare(b.label)));
+    return out;
+  });
+  const detailMissing = $derived(openedTeam ? openedTeam.agents.length - detailGroups.reduce((n, g) => n + g.rows.length, 0) : 0);
+  // Curated examples when present; otherwise a generic loop seeded with the name.
+  const detailExamples = $derived(
+    openedTeam
+      ? openedTeam.examples.length > 0
+        ? openedTeam.examples
+        : [`Use the ${openedTeam.label} team and work in a loop until [the work product] is built and tested — browser, functional, unit, and pen-test where applicable.`]
+      : [],
+  );
+
+  let teamCollapsed = $state<Set<string>>(new Set());
+  function toggleTeamGroup(slug: string) {
+    const next = new Set(teamCollapsed);
+    if (next.has(slug)) next.delete(slug);
+    else next.add(slug);
+    teamCollapsed = next;
+  }
+  let tcInitFor = "";
+  $effect(() => {
+    const k = openedTeam?.key ?? "";
+    // Guard on an empty group set too: if the corpus loads after the team opens
+    // (e.g. a cold back/forward restore), don't seed from an empty list — wait
+    // for detailGroups so divisions stay closed by default.
+    if (k === tcInitFor || detailGroups.length === 0) return;
+    tcInitFor = k;
+    teamCollapsed = new Set(detailGroups.map((g) => g.slug));
+  });
 
   // How many of a team's agents exist in the corpus / are currently installed.
   const corpusSlugs = $derived(new Set(corpus.agents.map((a) => a.slug)));
@@ -177,6 +271,15 @@
         {#snippet icon()}<ArchiveIcon size={48} />{/snippet}
         Install some agents — or deploy a <strong>preset</strong> — then save your setup as a team
         and <strong>Export</strong> it to move to a new Mac in one click.
+        {#snippet cta()}
+          <div class="empty-cta">
+            <Button variant="primary" onclick={() => (tab = "presets")}>
+              {#snippet icon()}<RocketIcon size={15} />{/snippet}
+              Browse team presets
+            </Button>
+            <button class="link-btn" onclick={() => ui.openPlaybook()}>New to agents? Open the Playbook →</button>
+          </div>
+        {/snippet}
       </EmptyState>
     {:else}
       <p class="lo-sub">
@@ -208,6 +311,54 @@
         {/each}
       </div>
     {/if}
+  {:else if openedTeam}
+    {@const team = openedTeam}
+    {@const st = teamStats(team.agents)}
+    {@const HeadIcon = team.icon}
+    <div class="tdetail">
+      <div class="td-head">
+        <span class="td-ic" style={team.color ? `color:${team.color}` : ""}><HeadIcon size={22} /></span>
+        <div class="td-id">
+          <h2 class="td-name">{team.label}</h2>
+          <p class="td-desc">{team.description}</p>
+        </div>
+        <span class="td-count">{st.count} agent{st.count === 1 ? "" : "s"}{#if st.deployed > 0} · {st.deployed} deployed{/if}</span>
+        <Button variant="primary" onclick={() => deploy(`Deploy ${team.label}`, team.agents)}>Deploy…</Button>
+      </div>
+
+      <h3 class="td-sec">Try these</h3>
+      <div class="td-examples">
+        {#each detailExamples as ex (ex)}
+          <StarterPrompt template={ex} />
+        {/each}
+      </div>
+
+      <h3 class="td-sec">{st.count} agent{st.count === 1 ? "" : "s"}{#if detailGroups.length > 1} · {detailGroups.length} divisions{/if}</h3>
+      <div class="groups">
+        {#each detailGroups as g (g.slug)}
+          {@const Icon = resolveCategoryIcon(g.icon)}
+          {@const isOpen = !teamCollapsed.has(g.slug)}
+          <section class="grp">
+            <button class="grp-head" onclick={() => toggleTeamGroup(g.slug)} aria-expanded={isOpen}>
+              <ChevronDown size={15} class={isOpen ? "grp-chev open" : "grp-chev"} />
+              <span class="grp-ic" style="color:{g.color}"><Icon size={15} /></span>
+              <span class="grp-label">{g.label}</span>
+              <span class="grp-count">{g.rows.length}</span>
+            </button>
+            {#if isOpen}
+              <ul class="rows">
+                {#each g.rows as a (a.slug)}
+                  <li class="row"><span class="row-emoji">{a.emoji ?? "🧩"}</span><span class="r-name">{a.name}</span></li>
+                {/each}
+              </ul>
+            {/if}
+          </section>
+        {/each}
+        {#if detailMissing > 0}
+          <p class="td-missing">{detailMissing} agent{detailMissing === 1 ? "" : "s"} in this team aren't in your catalog yet — they'll be skipped on deploy.</p>
+        {/if}
+      </div>
+    </div>
   {:else}
     <div class="cards">
       {#if teams.saved.length > 0}
@@ -216,13 +367,15 @@
           {#each teams.saved as t (t.id)}
             {@const st = teamStats(t.agents)}
             <li class="card">
-              <span class="card-ic saved"><UsersIcon size={18} /></span>
-              <span class="card-body">
-                <span class="card-title">{t.name}</span>
-                <span class="card-desc">{st.count} agent{st.count === 1 ? "" : "s"}{#if st.deployed > 0} · {st.deployed} deployed{/if}</span>
-              </span>
-              <button class="card-del" title="Delete team" aria-label="Delete team" onclick={() => deleteSaved(t)}><Trash2 size={14} /></button>
-              <Button size="sm" variant="secondary" onclick={() => deploy(`Deploy ${t.name}`, t.agents)}>Deploy…</Button>
+              <button class="card-main" onclick={() => openSaved(t)}>
+                <span class="card-ic saved"><UsersIcon size={18} /></span>
+                <span class="card-body">
+                  <span class="card-title">{t.name}</span>
+                  <span class="card-desc">{st.count} agent{st.count === 1 ? "" : "s"}{#if st.deployed > 0} · {st.deployed} deployed{/if}</span>
+                </span>
+                <ChevronRight size={16} class="card-go" />
+              </button>
+              <button class="card-del" title="Delete team" aria-label={`Delete ${t.name}`} onclick={() => deleteSaved(t)}><Trash2 size={14} /></button>
             </li>
           {/each}
         </ul>
@@ -234,13 +387,15 @@
           {@const st = teamStats(p.agents)}
           {@const Icon = p.icon}
           <li class="card">
-            <span class="card-ic" style="color:{p.color}"><Icon size={18} /></span>
-            <span class="card-body">
-              <span class="card-title">{p.label}</span>
-              <span class="card-desc">{p.description}</span>
-              <span class="card-meta">{st.count} agent{st.count === 1 ? "" : "s"}{#if st.deployed > 0} · {st.deployed} deployed{/if}</span>
-            </span>
-            <Button size="sm" variant="secondary" onclick={() => deploy(`Deploy ${p.label}`, p.agents)}>Deploy…</Button>
+            <button class="card-main" onclick={() => openPreset(p)}>
+              <span class="card-ic" style="color:{p.color}"><Icon size={18} /></span>
+              <span class="card-body">
+                <span class="card-title">{p.label}</span>
+                <span class="card-desc">{p.description}</span>
+                <span class="card-meta">{st.count} agent{st.count === 1 ? "" : "s"}{#if st.deployed > 0} · {st.deployed} deployed{/if}</span>
+              </span>
+              <ChevronRight size={16} class="card-go" />
+            </button>
           </li>
         {/each}
       </ul>
@@ -320,18 +475,45 @@
   .cards-h:first-child { margin-top: 0; }
   .card-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
   .card {
-    display: flex; align-items: center; gap: var(--space-3);
-    padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-lg);
-    background: var(--color-surface-raised);
+    display: flex; align-items: stretch; gap: 0;
+    border: 1px solid var(--color-border); border-radius: var(--radius-lg);
+    background: var(--color-surface-raised); overflow: hidden;
   }
+  .card:hover { border-color: var(--color-border-strong, var(--color-text-muted)); }
+  .card-main {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-3);
+    padding: var(--space-3); background: transparent; cursor: pointer; text-align: left;
+  }
+  .card-main:hover { background: var(--color-surface-sunken); }
+  :global(.card-go) { flex: none; color: var(--color-text-muted); }
   .card-ic { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: var(--radius-md); background: var(--color-surface-sunken); }
   .card-ic.saved { color: var(--color-text-secondary); }
   .card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .card-title { font-weight: var(--fw-semibold); color: var(--color-text-primary); }
   .card-desc { font-size: var(--text-body-sm); color: var(--color-text-secondary); }
   .card-meta { font-size: var(--text-caption); color: var(--color-text-muted); }
-  .card-del { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: var(--radius-md); color: var(--color-text-muted); cursor: pointer; }
+  .card-del { flex: none; align-self: center; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin-right: var(--space-2); border-radius: var(--radius-md); color: var(--color-text-muted); cursor: pointer; }
   .card-del:hover { background: var(--color-surface-sunken); color: var(--color-danger); }
 
   .save-sub { font-size: var(--text-body-sm); color: var(--color-text-secondary); margin-bottom: var(--space-3); }
+
+  .empty-cta { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
+  .link-btn { background: transparent; color: var(--color-text-link, var(--color-brand)); font-size: var(--text-body-sm); cursor: pointer; padding: 2px; }
+  .link-btn:hover { text-decoration: underline; }
+
+  /* ── Team detail (master/detail over the presets tab) ── */
+  .tdetail { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-3) var(--space-4) var(--space-5); display: flex; flex-direction: column; gap: var(--space-3); }
+  .td-head { display: flex; align-items: center; gap: var(--space-3); }
+  .td-ic { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: var(--radius-md); background: var(--color-surface-sunken); }
+  .td-id { flex: 1; min-width: 0; }
+  .td-name { font-size: var(--text-h2); font-weight: var(--fw-semibold); color: var(--color-text-primary); }
+  .td-desc { font-size: var(--text-body-sm); color: var(--color-text-secondary); }
+  .td-count { flex: none; font-size: var(--text-body-sm); color: var(--color-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .td-sec { font-size: var(--text-caption); font-weight: var(--fw-semibold); color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .td-examples { display: flex; flex-direction: column; gap: var(--space-2); }
+  .td-missing { font-size: var(--text-caption); color: var(--color-text-muted); padding: var(--space-2) var(--space-2) 0; }
+  .row-emoji { flex: none; font-size: 15px; line-height: 1; }
+  /* In the detail, the whole pane scrolls — don't make the group list its own
+     scroll region (it inherits .groups from the "Your team" tab). */
+  .tdetail .groups { flex: none; overflow: visible; padding: 0; }
 </style>

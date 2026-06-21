@@ -30,6 +30,8 @@
   import DiffModal from "./DiffModal.svelte";
   import DivisionsLanding from "./DivisionsLanding.svelte";
   import InstallModal from "./InstallModal.svelte";
+  import StarterPrompt from "./StarterPrompt.svelte";
+  import { divisionPrompt } from "$lib/data/playbook";
   import DownloadIcon from "@lucide/svelte/icons/download";
 
   import { corpus } from "$lib/stores/corpus.svelte";
@@ -151,6 +153,17 @@
     if (lens !== "all" && lensCounts[lens] === 0) setLens("all");
   });
 
+  // Close the detail pane when the open agent falls out of the list — e.g.
+  // switching divisions or refining search leaves the detail showing an agent
+  // you can no longer see in the picker. Only strands a real (in-corpus) agent;
+  // an unresolved slug is left to the loader below.
+  $effect(() => {
+    const slug = ui.agentsSelected;
+    if (!slug) return;
+    const inCorpus = corpus.agents.some((a) => a.slug === slug);
+    if (inCorpus && !base.some((a) => a.slug === slug)) ui.selectAgent(null);
+  });
+
   // The Agents tab LANDS on the division list (not a flat agent list): only when
   // no division is drilled into AND there's no active search. Picking a division
   // or typing a query switches to the agent list below.
@@ -166,6 +179,19 @@
     catMenuOpen = false;
   }
   const categoryLabel = $derived(ui.agentsCategory ? corpus.labelOf(ui.agentsCategory) : "All divisions");
+
+  // ── Division overview banner — shown atop a division's agent list (not while
+  //    searching or selecting): what the division is for + deploy-the-whole-
+  //    division + a starter prompt. null = hidden. ──
+  const divisionMeta = $derived.by(() => {
+    const slug = ui.agentsCategory;
+    if (!slug || query.trim() || selectMode) return null;
+    const slugs = corpus.agents.filter((a) => a.category === slug).map((a) => a.slug);
+    if (slugs.length === 0) return null;
+    const label = corpus.labelOf(slug);
+    return { slug, label, color: corpus.colorOf(slug), icon: corpus.iconOf(slug), slugs, prompt: divisionPrompt(slug, label) };
+  });
+  let divisionInstallOpen = $state(false);
 
   // Compact per-row state dots (one per install row, colored by state).
   function dotTone(s: InstallState): string {
@@ -226,6 +252,8 @@
   let menuOpen = $state(false);
   let bulkBusy = $state(false);
   let confirmDelete = $state(false);
+  // Bulk deploy: the shared InstallModal opened over the current selection.
+  let bulkInstallOpen = $state(false);
 
   function enterSelect() { selectMode = true; }
   function exitSelect() { selectMode = false; menuOpen = false; selected = new Set(); }
@@ -350,6 +378,10 @@
               </button>
               {#if menuOpen}
                 <div class="bulk-menu" role="menu" bind:this={bulkMenu}>
+                  <button class="bulk-opt" role="menuitem" onclick={() => { menuOpen = false; bulkInstallOpen = true; }}>
+                    <DownloadIcon size={14} /><span>Install… — deploy to tools &amp; projects</span>
+                  </button>
+                  <div class="bulk-div"></div>
                   <button class="bulk-opt" role="menuitem" disabled={!canBulkUpdate} title={canBulkUpdate ? "" : "All selected are in sync"} onclick={() => runBulk("update", "Updated")}>
                     <RefreshIcon size={14} /><span>Update — replace with catalog version</span>
                   </button>
@@ -368,6 +400,20 @@
     </div>
 
     <div class="lp-list">
+      {#if divisionMeta}
+        {@const Icon = resolveCategoryIcon(divisionMeta.icon)}
+        <div class="dov">
+          <div class="dov-head">
+            <span class="dov-ic" style="color:{divisionMeta.color}"><Icon size={18} /></span>
+            <div class="dov-id">
+              <span class="dov-name">{divisionMeta.label}</span>
+              <span class="dov-sub">{divisionMeta.slugs.length} agents · deploy the whole division, or open one to install just that specialist.</span>
+            </div>
+            <button class="dov-deploy" onclick={() => (divisionInstallOpen = true)}><DownloadIcon size={14} /> Deploy division…</button>
+          </div>
+          <StarterPrompt template={divisionMeta.prompt} />
+        </div>
+      {/if}
       {#if corpus.loading && corpus.agents.length === 0}
         <LoadingState rows={6} label="Loading agents…" />
       {:else if corpus.error && corpus.agents.length === 0}
@@ -472,6 +518,22 @@
 
 {#if installOpen && panelAgent}
   <InstallModal title={`Install ${panelAgent.name}`} agentSlugs={[panelAgent.slug]} onClose={() => (installOpen = false)} />
+{/if}
+
+{#if bulkInstallOpen && selected.size > 0}
+  <InstallModal
+    title={`Install ${selected.size} agent${selected.size === 1 ? "" : "s"}`}
+    agentSlugs={[...selected]}
+    onClose={() => (bulkInstallOpen = false)}
+  />
+{/if}
+
+{#if divisionInstallOpen && divisionMeta}
+  <InstallModal
+    title={`Install ${divisionMeta.label} division`}
+    agentSlugs={divisionMeta.slugs}
+    onClose={() => (divisionInstallOpen = false)}
+  />
 {/if}
 
 {#if confirmDelete}
@@ -590,8 +652,30 @@
   .bulk-opt:disabled { opacity: 0.4; cursor: default; }
   .bulk-opt.danger { color: var(--color-danger); }
   .bulk-opt.danger:hover { background: color-mix(in srgb, var(--color-danger) 12%, transparent); }
+  .bulk-div { height: 1px; margin: 4px 0; background: var(--color-border); }
 
   .check { accent-color: var(--color-brand); cursor: pointer; width: 15px; height: 15px; flex: none; }
+
+  /* ── Division overview banner ── */
+  .dov {
+    margin: var(--space-1) var(--space-1) var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--color-border); border-radius: var(--radius-lg);
+    background: var(--color-surface-raised);
+    display: flex; flex-direction: column; gap: var(--space-3);
+  }
+  .dov-head { display: flex; align-items: center; gap: var(--space-3); }
+  .dov-ic { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: var(--radius-md); background: var(--color-surface-sunken); }
+  .dov-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .dov-name { font-size: var(--text-body); font-weight: var(--fw-semibold); color: var(--color-text-primary); }
+  .dov-sub { font-size: var(--text-caption); color: var(--color-text-muted); }
+  .dov-deploy {
+    flex: none; display: inline-flex; align-items: center; gap: 6px;
+    height: 30px; padding: 0 12px; border-radius: var(--radius-md);
+    border: 1px solid var(--color-border); background: var(--color-surface-sunken);
+    color: var(--color-text-primary); font-size: var(--text-body-sm); cursor: pointer;
+  }
+  .dov-deploy:hover { border-color: var(--color-brand); }
 
   /* ── Rows ── */
   .lp-list { flex: 1; overflow-y: auto; min-height: 0; padding: var(--space-2) var(--space-3); }

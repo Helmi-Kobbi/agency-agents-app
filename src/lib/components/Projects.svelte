@@ -1,28 +1,19 @@
 <script lang="ts">
   /**
    * Projects — the 4th pillar (Agents / Tools / Teams / Projects). The home for
-   * per-project deployments: every folder you've installed agents into shows up
-   * here as a row with its roster.
+   * per-project deployments: every folder you've installed agents into.
    *
-   * • onMount → projects.refresh() (soft-fails to an empty list while the
-   *   backend `projects_list` command is wired up).
-   * • Header: "<N> project(s)" + "Add project…" — picks a folder, refreshes, and
-   *   immediately opens the DeployModal targeted at the new project so you can
-   *   install into it right away.
-   * • Empty: an EmptyState explaining the concept + an "Add project…" CTA.
-   * • Otherwise: a list of project rows (folder icon · label · muted path ·
-   *   installedCount). Each row expands to reveal that project's roster
-   *   (install.installed filtered to (row.projectPath ?? null) === project.path),
-   *   reusing the Teams "Your team" row pattern (name + tool Pill).
+   * Master/detail (not inline disclosures — a big roster gets unruly):
+   *  • List: a row per project (folder · label · path · count). Clicking a row
+   *    navigates into its detail via `ui.selectProject(path)` — a nav location,
+   *    so the title-bar Back button returns to the list.
+   *  • Detail: that project's path, actions (Deploy… · Reveal · Remove from
+   *    list), and its roster grouped by division (collapsible), reusing the
+   *    division-group pattern from Tools/Teams.
    *
-   * "Deploy…" decision (v1): DeployModal requires a fixed agent SET. Rather than
-   * dump the whole corpus (overwhelming) or invent a picker, we seed the modal
-   * with the agents ALREADY in that project. The tri-state then reflects the
-   * project's current coverage across project-capable tools and lets the user
-   * extend/retract that set per tool — the modal becomes "manage this project's
-   * loadout". When a project is empty there's nothing to seed, so we surface a
-   * hint pointing at Teams / Divisions (the set-deploy entry points) instead of
-   * opening an empty modal.
+   * "Deploy…" opens the two-pane DeployBrowser scoped to the project (pick an
+   * agent, division, or team on the left; install into the project's tools on
+   * the right) — so an empty project can be filled.
    */
   import { onMount } from "svelte";
   import EmptyState from "./EmptyState.svelte";
@@ -31,15 +22,22 @@
   import DeployBrowser from "./DeployBrowser.svelte";
   import FolderIcon from "@lucide/svelte/icons/folder";
   import FolderPlus from "@lucide/svelte/icons/folder-plus";
+  import FolderOpen from "@lucide/svelte/icons/folder-open";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import LayersIcon from "@lucide/svelte/icons/layers";
   import Trash2 from "@lucide/svelte/icons/trash-2";
 
   import { install } from "$lib/stores/install.svelte";
+  import { corpus } from "$lib/stores/corpus.svelte";
   import { projects } from "$lib/stores/projects.svelte";
-  import type { InstalledAgent, ProjectInfo } from "$lib/types";
+  import { ui } from "$lib/stores/ui.svelte";
+  import { toast } from "$lib/stores/toast.svelte";
+  import { resolveCategoryIcon } from "$lib/util/categoryIcon";
+  import type { InstalledAgent } from "$lib/types";
 
   onMount(() => {
+    corpus.ensureLoaded();
     projects.refresh();
   });
 
@@ -55,7 +53,6 @@
       if (arr) arr.push(r);
       else m.set(p, [r]);
     }
-    for (const arr of m.values()) arr.sort((a, b) => a.name.localeCompare(b.name));
     return m;
   });
 
@@ -63,19 +60,67 @@
     return rowsByProject.get(path) ?? [];
   }
 
-  // ── Expand / collapse a project's roster (mirrors Teams' division groups). ──
-  let expanded = $state<Set<string>>(new Set());
-  function toggle(path: string) {
-    const next = new Set(expanded);
-    if (next.has(path)) next.delete(path);
-    else next.add(path);
-    expanded = next;
+  // ── Selected project (detail pane). Resolve against the live list so a stale
+  //    path (e.g. removed) falls back to the list rather than an empty detail. ──
+  const selected = $derived(projects.list.find((p) => p.path === ui.projectsSelected) ?? null);
+
+  // ── Group the selected project's roster by division (collapsible). ──
+  const OTHER = "__other";
+  const detailGroups = $derived.by(() => {
+    if (!selected) return [];
+    const divOf = new Map(corpus.agents.map((a) => [a.slug, a.category]));
+    const m = new Map<string, InstalledAgent[]>();
+    for (const r of rosterFor(selected.path)) {
+      const div = divOf.get(r.slug) ?? OTHER;
+      const arr = m.get(div);
+      if (arr) arr.push(r);
+      else m.set(div, [r]);
+    }
+    const out = [...m.entries()].map(([slug, rows]) => ({
+      slug,
+      label: slug === OTHER ? "Other" : corpus.labelOf(slug),
+      color: slug === OTHER ? "#94A3B8" : corpus.colorOf(slug),
+      icon: slug === OTHER ? "HelpCircle" : corpus.iconOf(slug),
+      rows: rows.slice().sort((a, b) => a.name.localeCompare(b.name)),
+    }));
+    out.sort((a, b) => (a.slug === OTHER ? 1 : b.slug === OTHER ? -1 : a.label.localeCompare(b.label)));
+    return out;
+  });
+
+  // Division groups are CLOSED by default; initialize the collapse set to every
+  // division once per project (guarded so installs/removes don't re-collapse).
+  let collapsed = $state<Set<string>>(new Set());
+  function toggleGroup(slug: string) {
+    const next = new Set(collapsed);
+    if (next.has(slug)) next.delete(slug);
+    else next.add(slug);
+    collapsed = next;
+  }
+  let collapseInitFor: string | null = null;
+  $effect(() => {
+    const p = ui.projectsSelected;
+    // Wait for the roster to populate before seeding (cold corpus load) so the
+    // divisions stay closed by default rather than seeding from an empty list.
+    if (p === collapseInitFor || detailGroups.length === 0) return;
+    collapseInitFor = p;
+    collapsed = new Set(detailGroups.map((g) => g.slug));
+  });
+
+  // ── Deploy into a project: the two-pane DeployBrowser. ──
+  let browseFor = $state<string | null>(null); // project path, or null = closed
+
+  async function reveal(path: string) {
+    try {
+      await install.revealPath(path);
+    } catch (e) {
+      toast.error("Could not open folder", String(e));
+    }
   }
 
-  // ── Deploy into a project: open the two-pane DeployBrowser (pick an agent,
-  // division, or team on the left; install into this project's tools on the
-  // right). Opening it on a freshly-added project lets an empty one be filled. ──
-  let browseFor = $state<string | null>(null); // project path, or null = closed
+  function removeFromList(path: string) {
+    projects.unregister(path);
+    if (ui.projectsSelected === path) ui.selectProject(null);
+  }
 
   let adding = $state(false);
   async function addProject() {
@@ -85,7 +130,7 @@
       const p = await projects.addViaPicker();
       if (!p) return;
       await projects.refresh();
-      browseFor = p;
+      ui.selectProject(p); // land in the new project's detail (Deploy… from there)
     } finally {
       adding = false;
     }
@@ -93,79 +138,100 @@
 </script>
 
 <section class="pr">
-  <header class="pr-head">
-    <p class="pr-count">{projects.list.length} project{projects.list.length === 1 ? "" : "s"}</p>
-    <div class="pr-actions">
-      <button class="btn primary" disabled={adding} onclick={addProject}>
-        <FolderPlus size={15} /><span>Add project…</span>
-      </button>
-    </div>
-  </header>
+  {#if selected}
+    <!-- ── Detail ── -->
+    <header class="pr-head detail">
+      <span class="dh-ic"><FolderIcon size={20} /></span>
+      <div class="dh-id">
+        <h2 class="dh-label">{selected.label}</h2>
+        <button class="dh-path" title={selected.path} onclick={() => reveal(selected.path)}>{selected.path}</button>
+      </div>
+      <span class="dh-count">{selected.installedCount} agent{selected.installedCount === 1 ? "" : "s"}</span>
+      <button class="btn" onclick={() => reveal(selected.path)}><FolderOpen size={15} /><span>Reveal</span></button>
+      <button class="btn primary" onclick={() => (browseFor = selected.path)}>Deploy…</button>
+      <button class="btn danger-ic" title="Remove from list" aria-label="Remove project from list" onclick={() => removeFromList(selected.path)}><Trash2 size={15} /></button>
+    </header>
 
-  {#if projects.list.length === 0}
     <div class="scroll">
-      <EmptyState title="No projects yet">
-        {#snippet icon()}<FolderIcon size={48} />{/snippet}
-        Install agents into a project — a folder with <strong>Claude</strong>, <strong>Codex</strong>,
-        or another tool — and that project shows up here with its roster. Work wherever you like:
-        <code>~/Software/*</code>, <code>~/Clean/*</code>, anywhere.
-        {#snippet cta()}
-          <Button variant="primary" disabled={adding} onclick={addProject}>
-            {#snippet icon()}<FolderPlus size={15} />{/snippet}
-            Add project…
-          </Button>
-        {/snippet}
-      </EmptyState>
+      {#if detailGroups.length === 0}
+        <div class="d-empty">
+          <LayersIcon size={40} />
+          <p>No agents deployed here yet.</p>
+          <Button variant="primary" onclick={() => (browseFor = selected.path)}>Deploy a division or team…</Button>
+        </div>
+      {:else}
+        <div class="groups">
+          {#each detailGroups as g (g.slug)}
+            {@const Icon = resolveCategoryIcon(g.icon)}
+            {@const isOpen = !collapsed.has(g.slug)}
+            <section class="grp">
+              <button class="grp-head" onclick={() => toggleGroup(g.slug)} aria-expanded={isOpen}>
+                <ChevronDown size={15} class={isOpen ? "pr-chev open" : "pr-chev"} />
+                <span class="grp-ic" style="color:{g.color}"><Icon size={15} /></span>
+                <span class="grp-label">{g.label}</span>
+                <span class="grp-count">{g.rows.length}</span>
+              </button>
+              {#if isOpen}
+                <ul class="roster">
+                  {#each g.rows as r (r.slug + r.tool)}
+                    <li class="r-row">
+                      <span class="r-name">{r.name}</span>
+                      <Pill tone="neutral">{install.toolLabel(r.tool)}</Pill>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </section>
+          {/each}
+        </div>
+      {/if}
     </div>
   {:else}
-    <ul class="rows">
-      {#each projects.list as project (project.path)}
-        {@const roster = rosterFor(project.path)}
-        {@const isOpen = expanded.has(project.path)}
-        {@const canExpand = roster.length > 0}
-        <li class="proj">
-          <div class="proj-main">
-            <button
-              class="proj-toggle"
-              class:bare={!canExpand}
-              onclick={() => canExpand && toggle(project.path)}
-              aria-expanded={canExpand ? isOpen : undefined}
-              disabled={!canExpand}
-            >
-              {#if canExpand}
-                <ChevronDown size={15} class={isOpen ? "proj-chev open" : "proj-chev"} />
-              {:else}
-                <span class="proj-chev-spacer"></span>
-              {/if}
+    <!-- ── List ── -->
+    <header class="pr-head">
+      <p class="pr-count">{projects.list.length} project{projects.list.length === 1 ? "" : "s"}</p>
+      <div class="pr-actions">
+        <button class="btn primary" disabled={adding} onclick={addProject}>
+          <FolderPlus size={15} /><span>Add project…</span>
+        </button>
+      </div>
+    </header>
+
+    {#if projects.list.length === 0}
+      <div class="scroll">
+        <EmptyState title="No projects yet">
+          {#snippet icon()}<FolderIcon size={48} />{/snippet}
+          Install agents into a project — a folder with <strong>Claude</strong>, <strong>Codex</strong>,
+          or another tool — and that project shows up here with its roster. Work wherever you like:
+          <code>~/Software/*</code>, <code>~/Clean/*</code>, anywhere.
+          {#snippet cta()}
+            <div class="empty-cta">
+              <Button variant="primary" disabled={adding} onclick={addProject}>
+                {#snippet icon()}<FolderPlus size={15} />{/snippet}
+                Add project…
+              </Button>
+              <button class="link-btn" onclick={() => ui.openPlaybook()}>New to agents? Open the Playbook →</button>
+            </div>
+          {/snippet}
+        </EmptyState>
+      </div>
+    {:else}
+      <ul class="rows">
+        {#each projects.list as project (project.path)}
+          <li class="proj">
+            <button class="proj-row" onclick={() => ui.selectProject(project.path)}>
               <span class="proj-ic"><FolderIcon size={18} /></span>
               <span class="proj-body">
                 <span class="proj-label">{project.label}</span>
                 <span class="proj-path" title={project.path}>{project.path}</span>
               </span>
+              <span class="proj-count">{project.installedCount} agent{project.installedCount === 1 ? "" : "s"}</span>
+              <ChevronRight size={16} class="proj-go" />
             </button>
-            <span class="proj-count">{project.installedCount} agent{project.installedCount === 1 ? "" : "s"}</span>
-            <Button size="sm" variant="secondary" onclick={() => (browseFor = project.path)}>Deploy…</Button>
-            <button class="proj-del" title="Remove from list" aria-label="Remove project from list" onclick={() => projects.unregister(project.path)}><Trash2 size={14} /></button>
-          </div>
-
-          {#if canExpand && isOpen}
-            <ul class="roster">
-              {#each roster as r (r.slug + r.tool)}
-                <li class="r-row">
-                  <span class="r-name">{r.name}</span>
-                  <Pill tone="neutral">{install.toolLabel(r.tool)}</Pill>
-                </li>
-              {/each}
-            </ul>
-          {:else if !canExpand}
-            <p class="proj-empty">
-              <LayersIcon size={14} />
-              No agents here yet — hit <strong>Deploy…</strong> to add a division or team.
-            </p>
-          {/if}
-        </li>
-      {/each}
-    </ul>
+          </li>
+        {/each}
+      </ul>
+    {/if}
   {/if}
 </section>
 
@@ -182,52 +248,80 @@
   .pr-count { color: var(--color-text-secondary); font-size: var(--text-body-sm); }
   .pr-actions { display: flex; gap: var(--space-2); }
 
+  /* ── Detail header ── */
+  .pr-head.detail { justify-content: flex-start; }
+  .dh-ic {
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 40px; height: 40px; border-radius: var(--radius-md);
+    background: var(--color-surface-sunken); color: var(--color-text-secondary);
+  }
+  .dh-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .dh-label { font-size: var(--text-h2); font-weight: var(--fw-semibold); color: var(--color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dh-path {
+    font-size: var(--text-caption); color: var(--color-text-muted); background: transparent;
+    text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+  }
+  .dh-path:hover { color: var(--color-brand); text-decoration: underline; }
+  .dh-count { flex: none; font-size: var(--text-body-sm); color: var(--color-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
   .btn {
     display: inline-flex; align-items: center; gap: 6px;
     height: 32px; padding: 0 var(--space-3);
     border: 1px solid var(--color-border); border-radius: var(--radius-md);
     background: transparent; color: var(--color-text-secondary);
-    font-size: var(--text-body-sm); cursor: pointer;
+    font-size: var(--text-body-sm); cursor: pointer; flex: none;
   }
   .btn:hover:not(:disabled) { color: var(--color-text-primary); background: var(--color-surface-sunken); }
   .btn:disabled { opacity: 0.5; cursor: default; }
   .btn.primary { background: var(--color-brand); color: var(--color-text-inverse); border-color: transparent; }
   .btn.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--color-brand); }
+  .btn.danger-ic { padding: 0; width: 32px; justify-content: center; }
+  .btn.danger-ic:hover { color: var(--color-danger); border-color: var(--color-danger); background: color-mix(in srgb, var(--color-danger) 10%, transparent); }
 
   .scroll { flex: 1; min-height: 0; overflow-y: auto; }
 
-  /* ── Project rows ── */
-  .rows { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: var(--space-3) var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
+  .empty-cta { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
+  .link-btn { background: transparent; color: var(--color-text-link, var(--color-brand)); font-size: var(--text-body-sm); cursor: pointer; padding: 2px; }
+  .link-btn:hover { text-decoration: underline; }
+
+  /* ── Project list rows ── */
+  .rows { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
   .proj { border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-surface-raised); overflow: hidden; }
-  .proj-main { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); }
-  .proj-toggle {
-    flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2);
-    background: transparent; border: none; padding: var(--space-1) 0; cursor: pointer; text-align: left;
+  .proj:hover { border-color: var(--color-border-strong, var(--color-text-muted)); }
+  .proj-row {
+    width: 100%; display: flex; align-items: center; gap: var(--space-3);
+    padding: var(--space-3); background: transparent; cursor: pointer; text-align: left;
   }
-  .proj-toggle.bare { cursor: default; }
-  :global(.proj-chev) { color: var(--color-text-muted); transition: transform var(--motion-duration-fast, 120ms) ease; transform: rotate(-90deg); flex: none; }
-  :global(.proj-chev.open) { transform: rotate(0deg); }
-  .proj-chev-spacer { flex: none; width: 15px; }
-  .proj-ic { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: var(--radius-md); background: var(--color-surface-sunken); color: var(--color-text-secondary); }
+  .proj-row:hover { background: var(--color-surface-sunken); }
+  .proj-ic { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: var(--radius-md); background: var(--color-surface-sunken); color: var(--color-text-secondary); }
   .proj-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
   .proj-label { font-weight: var(--fw-semibold); color: var(--color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .proj-path { font-size: var(--text-caption); color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .proj-count { flex: none; font-size: var(--text-body-sm); color: var(--color-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .proj-del { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: var(--radius-md); color: var(--color-text-muted); cursor: pointer; }
-  .proj-del:hover { background: var(--color-surface-sunken); color: var(--color-danger); }
+  :global(.proj-go) { flex: none; color: var(--color-text-muted); }
 
-  /* ── Deploy chooser (pick a team/division to put into the project) ── */
+  /* ── Division groups (detail roster) ── */
+  .groups { padding: var(--space-3); display: flex; flex-direction: column; gap: 2px; }
+  .grp { display: flex; flex-direction: column; }
+  .grp-head {
+    display: flex; align-items: center; gap: var(--space-2);
+    width: 100%; padding: var(--space-2); border-radius: var(--radius-sm);
+    background: transparent; cursor: pointer; text-align: left;
+  }
+  .grp-head:hover { background: var(--color-surface-sunken); }
+  :global(.pr-chev) { color: var(--color-text-muted); transition: transform var(--motion-duration-fast, 120ms) ease; transform: rotate(-90deg); flex: none; }
+  :global(.pr-chev.open) { transform: rotate(0deg); }
+  .grp-ic { flex: none; display: inline-flex; }
+  .grp-label { flex: 1; min-width: 0; font-weight: var(--fw-semibold); color: var(--color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grp-count { flex: none; min-width: 20px; text-align: center; font-size: var(--text-caption); color: var(--color-text-muted); font-variant-numeric: tabular-nums; background: var(--color-surface-sunken); border-radius: var(--radius-full); padding: 1px 7px; }
 
-  .roster { list-style: none; margin: 0; padding: 0 var(--space-3) var(--space-2) calc(15px + var(--space-2) + var(--space-3)); display: flex; flex-direction: column; gap: 1px; }
+  .roster { list-style: none; margin: 0; padding: 2px 0 var(--space-2) var(--space-4); display: flex; flex-direction: column; gap: 1px; }
   .r-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); }
   .r-row:hover { background: var(--color-surface-sunken); }
   .r-name { flex: 1; min-width: 0; font-weight: var(--fw-medium); color: var(--color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  .proj-empty {
-    display: flex; align-items: center; gap: 6px;
-    padding: var(--space-1) var(--space-3) var(--space-3) calc(15px + var(--space-2) + var(--space-3));
-    font-size: var(--text-caption); color: var(--color-text-muted);
-  }
+  .d-empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3); color: var(--color-text-muted); padding: var(--space-6); }
+  .d-empty p { font-size: var(--text-body-sm); }
 
   code {
     font-family: var(--font-mono, ui-monospace, monospace);

@@ -141,9 +141,38 @@
     return path.replace(/\/+$/, "").split("/").pop() || path;
   }
 
-  async function addProject() {
+  // ── "Add project…" popover ──
+  // Instead of firing a native folder dialog on click (which feels broken in the
+  // dev shim and is easy to spam), open a list of the projects you already manage
+  // — clicking one jumps to its grid row — with an explicit "New Project…" that
+  // opens the picker only when you mean it.
+  let addOpen = $state(false);
+  let flashPath = $state<string | null>(null);
+  const destEls: Record<string, HTMLElement> = {};
+
+  function regDest(node: HTMLElement, path: string | null) {
+    if (path) destEls[path] = node;
+    return { destroy() { if (path) delete destEls[path]; } };
+  }
+
+  function flash(path: string) {
+    flashPath = path;
+    setTimeout(() => { if (flashPath === path) flashPath = null; }, 1200);
+  }
+
+  function jumpTo(path: string) {
+    addOpen = false;
+    destEls[path]?.scrollIntoView({ block: "nearest" });
+    flash(path);
+  }
+
+  async function newProject() {
+    addOpen = false;
     const p = await projects.addViaPicker();
-    if (p) await projects.refresh();
+    if (p) {
+      await projects.refresh();
+      flash(p);
+    }
   }
 </script>
 
@@ -162,7 +191,7 @@
     {/each}
 
     {#each rows as row (row.kind === "global" ? "global" : row.path)}
-      <div class="cell dest">
+      <div class="cell dest" class:flash={flashPath !== null && targetOf(row) === flashPath} use:regDest={targetOf(row)}>
         {#if row.kind === "global"}
           <span class="d-ic"><GlobeIcon size={15} /></span>
           <span class="d-body"><span class="d-label">Global</span><span class="d-path">Every machine</span></span>
@@ -198,7 +227,32 @@
   </div>
   {/if}
 
-  <button class="addrow" onclick={addProject}><FolderPlus size={14} /> Add project…</button>
+  <div class="add-wrap">
+    <button class="addrow" onclick={() => (addOpen = !addOpen)} aria-haspopup="menu" aria-expanded={addOpen}>
+      <FolderPlus size={14} /> Add project…
+    </button>
+    {#if addOpen}
+      <button class="add-scrim" aria-label="Close" onclick={() => (addOpen = false)}></button>
+      <div class="add-menu" role="menu">
+        {#if projects.list.length > 0}
+          <p class="add-head">Your projects</p>
+          {#each projects.list as p (p.path)}
+            <button class="add-opt" role="menuitem" onclick={() => jumpTo(p.path)}>
+              <FolderIcon size={14} />
+              <span class="add-body">
+                <span class="add-label">{p.label}</span>
+                <span class="add-path" title={p.path}>{p.path}</span>
+              </span>
+            </button>
+          {/each}
+          <div class="add-div"></div>
+        {/if}
+        <button class="add-opt new" role="menuitem" onclick={newProject}>
+          <FolderPlus size={14} /> <span>New Project…</span>
+        </button>
+      </div>
+    {/if}
+  </div>
 
   {#snippet actions()}
     <span class="legend"><span class="dot full"></span> installed <span class="dot half"></span> some <span class="dot"></span> none</span>
@@ -257,12 +311,45 @@
   .dot.busy { border-color: var(--color-text-muted); border-top-color: transparent; animation: spin 0.6s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  .add-wrap { position: relative; display: inline-block; margin-top: var(--space-2); }
   .addrow {
     display: inline-flex; align-items: center; gap: 6px;
-    margin-top: var(--space-2); padding: var(--space-2);
+    padding: var(--space-2);
     background: transparent; color: var(--color-brand); font-size: var(--text-body-sm); cursor: pointer;
   }
   .addrow:hover { text-decoration: underline; }
+
+  /* Backdrop closes the popover on any outside click. */
+  .add-scrim { position: fixed; inset: 0; z-index: 1; background: transparent; border: 0; cursor: default; }
+  .add-menu {
+    position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 2;
+    min-width: 260px; max-width: 360px; max-height: 280px; overflow-y: auto; padding: 4px;
+    background: var(--color-surface-raised); border: 1px solid var(--color-border);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .add-head {
+    padding: 6px 8px 2px; font-size: var(--text-caption); font-weight: var(--fw-semibold);
+    color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .add-opt {
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: 6px 8px; border-radius: var(--radius-sm);
+    background: transparent; color: var(--color-text-primary);
+    font-size: var(--text-body-sm); text-align: left; cursor: pointer; min-width: 0;
+  }
+  .add-opt:hover { background: var(--color-surface-sunken); }
+  .add-opt.new { color: var(--color-brand); font-weight: var(--fw-medium); }
+  .add-body { display: flex; flex-direction: column; gap: 0; min-width: 0; }
+  .add-label { font-weight: var(--fw-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .add-path { font-size: var(--text-caption); color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .add-div { height: 1px; margin: 4px 0; background: var(--color-border); }
+
+  .dest.flash { animation: destFlash 1.2s var(--motion-ease-out, ease-out); }
+  @keyframes destFlash {
+    0%, 100% { background: transparent; }
+    25% { background: var(--color-brand-subtle, color-mix(in srgb, var(--color-brand) 16%, transparent)); }
+  }
 
   .legend { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; font-size: var(--text-caption); color: var(--color-text-muted); }
   .legend .dot { width: 13px; height: 13px; }
