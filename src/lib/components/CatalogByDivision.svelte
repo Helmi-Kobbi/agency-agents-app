@@ -87,8 +87,9 @@
   }
 
   // Linked highlight: a division slug hovered anywhere (segment or label) lights
-  // that division and dims the rest — mirrors CoverageDonuts.
-  let hovered = $state<string | null>(null);
+  // that division and dims the rest. Bindable so it shares the highlight with the
+  // sibling CoverageDonuts in the merged card — hover here, the donuts light up.
+  let { hovered = $bindable(null) }: { hovered?: string | null } = $props();
   const dim = (slug: string) => hovered !== null && hovered !== slug;
 </script>
 

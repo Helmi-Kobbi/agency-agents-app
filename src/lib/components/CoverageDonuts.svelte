@@ -18,7 +18,7 @@
   import { corpus } from "$lib/stores/corpus.svelte";
   import { install, SUPPORTED_TOOLS } from "$lib/stores/install.svelte";
   import { ui } from "$lib/stores/ui.svelte";
-  import { toolAccent, toolMark } from "$lib/util/toolBadge";
+  import { toolAccent, toolMark, toolIcon } from "$lib/util/toolBadge";
 
   // Geometry (viewBox 0 0 120 120, matching HealthDonut's spec exactly).
   const STROKE = 16;
@@ -72,8 +72,10 @@
     return out;
   }
 
-  // Linked highlight: a division slug hovered anywhere (slice or legend).
-  let hovered = $state<string | null>(null);
+  // Linked highlight: a division slug hovered anywhere. Bindable so a sibling
+  // (the merged "Catalog by division" bar) shares the same highlight — hover a
+  // donut slice and that division lights up in the bar, and vice versa.
+  let { hovered = $bindable(null) }: { hovered?: string | null } = $props();
   const hoveredLabel = $derived(hovered ? (divisions.find((d) => d.slug === hovered)?.label ?? "") : "");
   function countIn(tool: string, slug: string): number {
     return donuts.find((d) => d.tool === tool)?.segs.find((s) => s.slug === slug)?.value ?? 0;
@@ -116,7 +118,13 @@
                 {/each}
               </g>
             </svg>
-            <div class="cd-badge" style="--accent:{toolAccent(d.tool)}">{toolMark(d.label)}</div>
+            <button
+              class="cd-badge"
+              style="--accent:{toolAccent(d.tool)}"
+              title={`Open ${d.label} in Tools`}
+              aria-label={`Open ${d.label} in Tools`}
+              onclick={() => ui.openTools(d.tool)}
+            >{#if toolIcon(d.tool)}<span class="glyph">{@html toolIcon(d.tool)}</span>{:else}{toolMark(d.label)}{/if}</button>
           </div>
           <div class="cd-meta">
             <span class="cd-tool">{d.label}</span>
@@ -129,26 +137,6 @@
         </div>
       {/each}
     </div>
-
-    <ul class="cd-legend">
-      {#each divisions as div (div.slug)}
-        <li>
-          <button
-            class="cd-leg"
-            class:hot={hovered === div.slug}
-            class:dim={hovered !== null && hovered !== div.slug}
-            title={`See all ${div.label} agents`}
-            onmouseenter={() => (hovered = div.slug)}
-            onmouseleave={() => (hovered = null)}
-            onclick={() => ui.openDivision(div.slug)}
-          >
-            <span class="cd-swatch" style="background:{div.color}"></span>
-            <span class="cd-leg-label truncate">{div.label}</span>
-            <span class="cd-leg-n">{div.total}</span>
-          </button>
-        </li>
-      {/each}
-    </ul>
   </div>
 {/if}
 
@@ -181,28 +169,17 @@
     background: linear-gradient(145deg, var(--accent), color-mix(in srgb, var(--accent) 70%, black));
     color: #fff; font-weight: var(--fw-bold); font-size: 22px;
     box-shadow: inset 0 1px 0 color-mix(in srgb, white 25%, transparent);
-    pointer-events: none;
+    cursor: pointer;
+    transition: transform var(--motion-duration-fast) var(--motion-ease-out),
+                filter var(--motion-duration-fast) var(--motion-ease-out);
   }
+  .cd-badge:hover { transform: translate(-50%, -50%) scale(1.06); filter: brightness(1.08); }
+  .cd-badge:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 2px; }
+  .cd-badge .glyph { display: inline-flex; align-items: center; justify-content: center; }
+  .cd-badge .glyph :global(svg) { width: 1em; height: 1em; }
 
   .cd-meta { display: flex; flex-direction: column; align-items: center; gap: 1px; min-height: 30px; }
   .cd-tool { font-size: var(--text-body-sm); font-weight: var(--fw-semibold); color: var(--color-text-primary); }
   .cd-sub { font-size: var(--text-caption); color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
 
-  .cd-legend {
-    display: flex; flex-wrap: wrap; gap: 2px 4px;
-    padding-top: var(--space-3); border-top: 1px solid var(--color-border);
-  }
-  .cd-leg {
-    display: inline-flex; align-items: center; gap: 6px; max-width: 200px;
-    padding: 3px 8px; border-radius: var(--radius-full);
-    background: transparent; cursor: pointer;
-    transition: opacity var(--motion-duration-fast) var(--motion-ease-out),
-                background var(--motion-duration-fast) var(--motion-ease-out);
-  }
-  .cd-leg:hover { background: var(--color-surface-sunken); }
-  .cd-leg.hot { background: var(--color-surface-sunken); }
-  .cd-leg.dim { opacity: 0.4; }
-  .cd-swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
-  .cd-leg-label { font-size: var(--text-caption); color: var(--color-text-secondary); min-width: 0; }
-  .cd-leg-n { font-size: 10px; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
 </style>
