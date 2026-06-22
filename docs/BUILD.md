@@ -120,7 +120,8 @@ https://agencyagents.app/updater.json
 ```
 
 Served by Caddy on `umacbookpro` from `~/Sites/agency-agents/` (the `agencyagents.app`
-docroot) — the same box and pattern as the live `brew-browser.zerologic.com/updater.json`.
+docroot). This is the same Caddy `file_server` box that already serves the live
+`brew-browser.zerologic.com/updater.json` from a sibling vhost — the pattern is proven.
 
 The updater artifact is a gzipped `.app` tarball, not the `.dmg`.
 
