@@ -141,3 +141,38 @@ wiring when we do it: a `tauri.windows.conf.json` (mirroring the macOS split) wi
 `bundle.windows.certificateThumbprint`/`signCommand` + `timestampUrl`, build the **NSIS** installer (drop
 `--no-bundle`), sign exe + installer for both arm64 and x64, and verify on the Parallels Windows 11 VM with
 a Mark-of-the-Web download.
+
+### 2026-06-21: Tool registry as the single source of truth (drop the `Tool` enum)
+**Status**: Approved (PRs #18 + #19). **Context**: tool knowledge was scattered — a Rust `Tool` enum + 8
+hardcoded match-arm functions (label/detect/version/dests/scope/render), and on the frontend `ACCENTS`/
+`ICONS_SVG`/`SHORT`/a hardcoded `SUPPORTED_TOOLS` + a `Tool` union. Adding a tool meant editing ~13 places;
+adding one upstream in the CLI meant another ~13. **Decision**: a JSON registry is the single source. The Rust
+`Tool` enum is removed — a tool is a `String` id; `label`/`detect`/`version`/`dests`/`scope` are registry lookups
+and `render()` dispatches on a `format` key. The string id IS the serialized wire value (camelCase), so ledger
+JSON stays compatible. **Alternatives**: codegen a typed union from the JSON (rejected — a generate step is "an
+index to forget," the exact thing we're killing). **Consequences**: adding a tool that reuses an existing
+`format` is data-only on both sides; a brand-new output shape needs one formatter function. Byte-parity tests
+guard the render output. Load-bearing.
+
+### 2026-06-21: `tools.json` is upstream-owned; installability is derived app-side
+**Status**: Approved (coordinated with the `agency-agents` catalog repo). **Context**: who owns the canonical
+tool list? The catalog repo already owns `divisions.json` (validated by a no-jq `check-divisions.sh`), and the
+app is "a respectful frontend over the clone." **Decision**: the catalog repo owns the canonical **`tools.json`**
+(twin of `divisions.json`), CI-guarded by `check-tools.sh` (the no-jq twin of `check-divisions.sh`, enforced by
+`check-tools.yml`). It carries *upstream truth only* — what the CLI converts + installs. The app consumes a
+bundled baseline (follow-up: refresh from the clone). Whether THIS app can install a tool is **derived, not
+stored**: `installable(tool) = tool.format ∈ IMPLEMENTED_FORMATS` (the 7 formats the Rust renderer implements).
+**Alternatives**: an `appRenderer`/`wired` bool in the catalog (rejected — couples upstream to app release
+state; the format-membership rule is self-maintaining: ship a renderer → add its format → those tools light up).
+**Consequences**: the catalog stays app-agnostic; the app's renderer coverage is one constant in two places
+(`registry.rs` + `toolRegistry.ts`); the two repos share one CI-protected contract.
+
+### 2026-06-21: Contribute transforms UPSTREAM first (Osaurus / the `skill-md` format)
+**Status**: Approved. **Context**: the Rust `render/` is a byte-identical *port* of the catalog's
+`scripts/convert.sh` (guarded by the parity test). A transform the app invents but `convert.sh` lacks would
+**diverge** — a CLI `install.sh` user wouldn't get it. **Decision**: new transforms land in the catalog's
+`convert.sh`/`install.sh` FIRST (canonical), then the app mirrors them. Osaurus shipped this way: a
+`convert_osaurus` → Agent-Skills `SKILL.md` upstream, mirrored by a Rust `skill-md` format (with `slugPrefix:
+"agency-"`). **Consequences**: one `skill-md` renderer covers Osaurus and any future Agent-Skills tool; the
+parity test keeps the app honest. Antigravity stays app-recognized-only until upstream makes its skill
+deterministic (its `date_added` is non-deterministic, so it can't share `skill-md`).

@@ -648,3 +648,24 @@ Cut the first public release: **github.com/msitarzewski/agency-agents-app/releas
   fingerprints don't include it), then Tauri reuses the cache to bundle. Full recipe in `docs/BUILD.md`
   ("Troubleshooting: proc-macro 'can't find crate' on a beta macOS") + [[macos-beta-macosx-deployment-target-breaks-proc-macros]].
   Red herrings ruled out: toolchain, linker, Xcode CLT-vs-beta, PATH/node shims, ulimit (1M), disk (5TB), RAM (128GB).
+
+## 2026-06-21 — v0.1.2: tool registry single-source + all 13 tools + Osaurus + Playbook + Projects dashboard
+Two PRs merged (`main` @ `1df932c`):
+- **PR #18** — Tool registry as the single source of truth. Killed the Rust `Tool` enum (a tool is now a string
+  id; label/detect/version/dests/scope are registry lookups, `render()` dispatches on a `format` key); deleted
+  the frontend ACCENTS/ICONS_SVG/SHORT/hardcoded SUPPORTED_TOOLS. All 13 tools modeled (incl. Kimi), real brand
+  logos (Lobe Icons, MIT). **Osaurus wired** via a new `skill-md` format (Agent-Skills `SKILL.md`, byte-identical
+  to upstream `convert_osaurus`) — verified live, catalog agents run as native Osaurus skills. Plus the Playbook
+  (in-app + `docs/USING-AGENTS.md`), Teams/Projects master-detail (system back-arrow nav), division overview, and
+  a Global-vs-Projects dashboard sunburst + merged cross-tool/catalog card. 8 themed commits.
+- **PR #19** — consolidated to the single upstream-owned `tools.json`; dropped the `wired` field + `include_dir`
+  dep; **installability derived** from `format ∈ IMPLEMENTED_FORMATS` (7 formats) on both sides.
+- **Upstream coordination** (`AgentLand/agency-agents`, same machine, with the "aa Claude"): contributed the
+  Osaurus transformer (`convert.sh`/`install.sh`) and the canonical `tools.json` + `scripts/check-tools.sh`
+  (no-jq twin of `check-divisions.sh`) + `.github/workflows/check-tools.yml`. aa landed PRs #605/#606; our
+  bundled `tools.json` is byte-identical to the canonical (diff-verified — same machine, no relaying).
+- Green: `cargo test` 264/0 (parity intact), `svelte-check` 0, build clean. Cargo.toml `macos-private-api`
+  injection reverted before each commit (the usual `tauri dev` cycle).
+- Decisions recorded in `decisions.md` (registry single-source / Tool=string · `tools.json` upstream-owned +
+  derived installability · contribute transforms upstream first). Task doc:
+  `tasks/2026-06/260621_tool-registry-12-tools-osaurus.md`.

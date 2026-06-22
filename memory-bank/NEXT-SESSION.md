@@ -3,6 +3,15 @@
 Read this first after a compaction. Then `activeContext.md`, `agentLog.md` (append-only history),
 `phases/phase-roadmap.md`, `contracts.md`, `systemPatterns.md`, `decisions.md`.
 
+## ⏩ CURRENT (2026-06-22) — read `activeContext.md` for the live picture
+v0.1.0 SHIPPED (2026-06-16, public/signed/brew). Since then: **v0.1.1** (IA re-org — divisions landing, Teams,
+Projects pillar, the single InstallModal grid + DeployBrowser) and **v0.1.2** (`main` @ `1df932c`, PRs #18+#19):
+the **tool registry single-source** arc — `Tool` enum gone, one upstream-owned `tools.json` (twin of
+`divisions.json`), installability derived from `format ∈ IMPLEMENTED_FORMATS`, all 13 tools, **Osaurus wired**
+(`skill-md`), in-app Playbook, Teams/Projects master-detail, Projects dashboard sunburst. Much below predates
+v0.1.0 (counts/paths may be stale) — `activeContext.md` + `agentLog.md` are authoritative. **NEXT: release prep
+for v0.1.2** (version bump + notes + README Loadouts→Teams).
+
 ## ✅ THE RE-ORG LANDED (verified 2026-06-14)
 The catalog re-org happened: the active clone now indexes **232 agents** (was ~222). The parity test
 runs against this live clone and passes 1160/1160, so category discovery + recursive indexing absorbed

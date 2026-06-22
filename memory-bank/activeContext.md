@@ -6,9 +6,34 @@
 Site: [agencyagents.app](https://agencyagents.app). Homebrew: `brew tap msitarzewski/agency-agents && brew install --cask agency-agents`.
 Cross-platform CI in `.github/workflows/` (linux-build, windows-build) fires on `v*` tags. macOS DMGs build
 locally via `scripts/release.sh` (mind the beta-toolchain `MACOSX_DEPLOYMENT_TARGET` gotcha — `docs/BUILD.md`).
-Now on **v0.1.1 dev**. Full launch log: `agentLog.md` 2026-06-16.
+Now on **v0.1.2 dev** (`main` @ `1df932c`, PRs #18 + #19 merged). Full launch log: `agentLog.md` 2026-06-16.
 
 **Workflow (from 2026-06-16):** ALL changes go through a **branch → PR → merge to `main`**. No direct commits to main.
+
+## ✅ v0.1.2 — Tool registry + Osaurus + Playbook + Projects dashboard — SHIPPED (2026-06-21, PRs #18 + #19; `main` @ 1df932c)
+**Tool knowledge is now a single source of truth.** It consolidated to the single canonical `tools.json` the
+upstream `agency-agents` repo OWNS (twin of `divisions.json`, CI-guarded by its no-jq `check-tools.sh`); both the
+Rust backend (`registry.rs`, `include_str!`) and the frontend (`toolRegistry.ts`) read it. **The Rust `Tool` enum
+is GONE** — a tool is a string id; `label`/`detect`/`version`/`dests`/`scope` are registry lookups; `render()`
+dispatches on the JSON `format` key. Frontend deleted ACCENTS/ICONS_SVG/SHORT/hardcoded SUPPORTED_TOOLS.
+**Adding a tool = editing one JSON file** (+ a Rust formatter only for a brand-new output format).
+- **All 13 tools** modeled (incl. Kimi, Osaurus); Tools panel shows installable + recognized-only (dimmed). Real
+  brand logos (Lobe Icons, MIT) under `assets/tools/`, letter fallback otherwise.
+- **Installability derived, not stored:** `installable(tool) = format ∈ IMPLEMENTED_FORMATS` ({identity,
+  codex-toml, gemini-md, qwen-md, cursor-mdc, opencode-md, skill-md}). aa owns upstream truth; renderer coverage
+  is app-side + self-maintaining (ship a renderer → add its format → those tools light up).
+- **Osaurus wired** via a `skill-md` format (Agent-Skills `SKILL.md`, `slugPrefix:"agency-"`), byte-identical to
+  upstream `convert_osaurus` — contributed UPSTREAM first (catalog owns transforms), mirrored here (parity test).
+  Verified live: catalog agents run as native Osaurus skills.
+- **Playbook** (in-app practices + copyable starter prompts + per-team/division examples; title-bar 📖 + ⌘K) +
+  `docs/USING-AGENTS.md`. **Teams & Projects master/detail** via the system back arrow
+  (`ui.projectsSelected`/`teamsSelected`); **division overview** + deploy.
+- **Dashboard**: two-ring Global-vs-Projects install **sunburst** (`InstallSunburst.svelte`) so totals reconcile;
+  cross-tool coverage **merged** with catalog-by-division (linked hover); uniform donuts, equal-height cards.
+
+Task doc: [tasks/2026-06/260621_tool-registry-12-tools-osaurus.md](tasks/2026-06/260621_tool-registry-12-tools-osaurus.md).
+Green: cargo 264/0, svelte-check 0, build clean. Upstream `agency-agents` (same machine): Osaurus transformer +
+`tools.json` + `check-tools.sh` + `check-tools.yml` landed (aa PRs #605/#606).
 
 ## ✅ v0.1.1 IA arc — SHIPPED (2026-06-17 → 06-20, PRs #15 + #16, + the deploy-browser PR)
 The whole "how people think about agents" reorganization landed:
@@ -32,8 +57,13 @@ The whole "how people think about agents" reorganization landed:
 **Four-pillar model (drives IA copy):** Agents = *who* · Tools = *how* · Teams = *which* · Projects = *where*.
 
 ## 🔵 Backlog (next)
-- **InstallModal → pick from existing Projects + "New Project…"** (instead of the inline folder-picker; now
-  that Projects is a managed list). [raised 2026-06-20]
+- **Release prep** for v0.1.2: version bump + release notes + README features pass ("Loadouts" → Teams; mention
+  the tool registry / 13 tools / Osaurus).
+- **Refresh `tools.json` from the catalog clone** (vs. the bundled baseline) — like the corpus + `divisions.json`;
+  cleaner now that aa #605 prunes stale convert output.
+- **Foreign-sweep for nested skill dirs** (`…/<dir>/SKILL.md`) so CLI-installed Osaurus/Antigravity skills are
+  detected (app-installed ones already are).
+- **Antigravity wiring** once upstream makes its skill deterministic (drops the non-deterministic `date_added`).
 - **"Auto Updates" subscription** for bulk installs — installing all of a division/team into a project/tool
   offers to auto-deploy newly-added catalog agents.
 - **Copilot `.md` → `.agent.md`** (needs reconcile `file_stem` double-extension handling).
@@ -45,7 +75,7 @@ auto-driven), a `?shim=1` Tauri-IPC shim is temporarily injected into `src/app.h
 ships. The shim can't open a real native folder dialog (returns a fixture path), so "Add project…" looks broken
 in the shim though it works natively.
 
-**Last updated**: 2026-06-20
+**Last updated**: 2026-06-22
 
 ## ✅ Pre-release polish (2026-06-15) — committed + pushed on `release-planning`
 - **brew vestige cleanup**: error-type rename (`BrewError*`→`AppError*`), removed dead `catalogAutoRefresh`

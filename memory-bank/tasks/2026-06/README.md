@@ -44,7 +44,24 @@ inherited "Activity" surface into a **usage journal** (workflow-built + team-rev
 (`.cargo/config.toml`). Green: svelte-check 0, cargo 258/0. Pushed on `release-planning` (not cut).
 See [260615_pre-release-polish.md](./260615_pre-release-polish.md).
 
+### 2026-06-16: v0.1.0 SHIPPED — public, signed, Homebrew
+First public release: 7 cross-platform artifacts (signed/notarized macOS DMGs, Linux deb/rpm/AppImage, Windows
+NSIS), repo made public, `brew tap msitarzewski/agency-agents`. See agentLog 2026-06-16.
+
+### 2026-06-17→20: v0.1.1 — the IA re-org (PRs #15 + #16 + deploy-browser)
+Divisions landing, install-state lens, Teams (← Loadouts), the how×where engine, Projects pillar, the single
+destinations×tools InstallModal, the two-pane DeployBrowser. Four-pillar model (Agents/Tools/Teams/Projects =
+who/how/which/where). See activeContext.md.
+
+### 2026-06-21: v0.1.2 — tool registry + all 13 tools + Osaurus + Playbook + Projects dashboard (PRs #18 + #19)
+Made tool knowledge a single source of truth (upstream-owned `tools.json`, twin of `divisions.json`; Rust `Tool`
+enum dropped; installability derived from `format ∈ IMPLEMENTED_FORMATS`). All 13 tools + real brand logos;
+**Osaurus wired** via a `skill-md` format byte-identical to the upstream transformer (contributed upstream first).
+In-app Playbook + `docs/USING-AGENTS.md`; Teams/Projects master-detail; Global-vs-Projects dashboard sunburst.
+cargo 264/0, svelte-check 0. See [260621_tool-registry-12-tools-osaurus.md](./260621_tool-registry-12-tools-osaurus.md).
+
 ## Next
-- Phase 4 — Trending + GitHub.
-- Deferred: multi-file tool renderers (antigravity/openclaw/aider/windsurf); local-runtime system-prompt
-  target (Ollama/LM Studio).
+- **Release prep** for v0.1.2: version bump + release notes + README "Loadouts" → Teams.
+- Refresh `tools.json` from the catalog clone; Foreign-sweep for nested skill dirs; Antigravity once its skill is
+  deterministic (`date_added` dropped).
+- Deferred: local-runtime system-prompt target (Ollama/LM Studio).
