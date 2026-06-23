@@ -669,3 +669,43 @@ Two PRs merged (`main` @ `1df932c`):
 - Decisions recorded in `decisions.md` (registry single-source / Tool=string · `tools.json` upstream-owned +
   derived installability · contribute transforms upstream first). Task doc:
   `tasks/2026-06/260621_tool-registry-12-tools-osaurus.md`.
+
+## 2026-06-23 — v0.2.0 SHIPPED: first feature release + LIVE auto-update (cross-platform, both Mac arches)
+Cut **v0.2.0** — the first release since the v0.1.0 launch. The manifests still said `0.1.0` and the only tag
+was `v0.1.0`, so the internally-tracked "0.1.1"/"0.1.2" milestones (IA re-org + registry/Osaurus/Playbook) were
+never separate releases; they ship here. Then took it further: **turned auto-update on for real.**
+- **Release prep (PR #21, merged):** version 0.1.0→0.2.0 (`package.json`+`tauri.conf.json`+`Cargo.toml`+`Cargo.lock`);
+  consolidated `docs/release-notes/0.2.0.md`; README four-pillar/Teams/Projects/registry/Osaurus pass (+ Osaurus
+  install-target row, 8 installable); `docs/PLAN.md` refresh (Phase D = done via the registry; post-0.2.0 punch
+  list). Inert "Install updates automatically" toggle (present-but-disabled). Fixed two stale updater strings
+  (`agency-agents-app.zerologic.com` → `agencyagents.app`; broken release-notes URL). **Dedicated agency signing
+  key `ABF5AFD8`** swapped in (clean isolation while no clients live). Scoped review (Code Reviewer + Accessibility)
+  caught a stale Rust `UPDATER_PUBKEY` const → synced. Updater-host ADR resolved (`decisions.md` 2026-06-22).
+- **Auto-update LIVE** at `agencyagents.app/updater.json` (Caddy on umbp from `~/Sites/agency-agents/`, sibling
+  vhost to the proven `brew-browser.zerologic.com` manifest). Building + deploying it surfaced real bugs, all
+  fixed (PR #22):
+  - `release.sh` **`set -u` empty-array crash** (`BUILD_ARGS`) + **missing `--config` merge** — the
+    macos-private-api allowlist check reads only base `tauri.conf.json` ([tauri#11142](https://github.com/tauri-apps/tauri/issues/11142)),
+    so the split `tauri.macos.conf.json` (`macOSPrivateApi:true`) was invisible → updater-on builds failed where
+    every `SKIP_UPDATER` build (which passes a `--config`) succeeded. Now always pass `--config '{"app":{"macOSPrivateApi":true}}'`.
+  - **Intel cross-compile:** active `rustc` is Homebrew's (host-only) → `can't find crate for core`. Build via the
+    **rustup** toolchain (`PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"`); `rustup target
+    add x86_64-apple-darwin` (force remove+add — the component was stale).
+  - **Updater Keychain key corrupted** (trailing-newline paste) → build-time signing `incorrect updater private
+    key password: Invalid input`. The *password* was fine (file-key + Keychain-password signs). Repaired by
+    re-storing the key from the canonical file via `$(cat ~/.config/agency-agents-app/updater.key)`. BUILD.md
+    reconciled to the **Keychain-based** flow `release.sh` actually uses (no `signing.env`).
+- **Shipped — GitHub release v0.2.0, 9 assets:** macOS `aarch64` + `x64` DMGs (signed/notarized) + both updater
+  tarballs (+`.sig`); Linux `deb`/`rpm`/`AppImage` + Windows `x64`/`arm64` NSIS (from the **tag-triggered CI**
+  workflows `linux-build.yml`/`windows-build.yml`). Live manifest covers `darwin-aarch64` **and** `darwin-x86_64`.
+  Homebrew cask bumped to 0.2.0 (`homebrew-agency-agents` @ ed5d283; url pattern dots→underscores + new sha256).
+- PRs **#21** (release) + **#22** (build-tooling/Keychain docs) merged; `main` @ `16182e5`. Asset naming for v0.2.0
+  uses **underscores** (`Agency_Agents_0.2.0_*`), not v0.1.0's auto-sanitized dots — the live updater manifest and
+  the brew cask both depend on this. Task doc: `tasks/2026-06/260623_v0.2.0-ship.md`.
+- **Post-ship UX (PR #23):** added a **"Needs attention" filter** to the Agents pane. After an app update the
+  Dashboard reports N agents needing attention, but there was no way to see ONLY those — the install-state lens
+  was hidden on the divisions landing and scoped to one division. The lens now lives in nav (`ui.agentsLens`,
+  deep-linkable + back/forward-safe); the Dashboard "N need attention" stat + health-donut segments deep-link to
+  the matching filtered view; an active lens shows a **flat all-divisions list** (`showDivisions` gates on
+  `lens === "all"`). New "Needs attention" bucket = Outdated ∪ Modified ∪ Missing. Dropped the lens's cross-launch
+  localStorage persistence (a sticky filter would hijack the landing). svelte-check 0, build clean.
