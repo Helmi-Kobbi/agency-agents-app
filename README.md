@@ -18,7 +18,7 @@ It is full source, MIT-licensed, local-first, and does not run telemetry.
 
 ## Why This Exists
 
-The `agency-agents` repo is a useful catalog of specialist AI agent personas, but every coding tool has its own agent format and install path. Claude Code, Codex, Cursor, Gemini CLI, Qwen, opencode, and Copilot all want similar content in slightly different places.
+The `agency-agents` repo is a useful catalog of specialist AI agent personas, but every coding tool has its own agent format and install path. Claude Code, Codex, Cursor, Gemini CLI, Qwen, opencode, Copilot, and Osaurus all want similar content in slightly different places.
 
 Agency Agents gives that catalog a native control surface:
 
@@ -190,7 +190,7 @@ The highest-value areas before 1.0 are:
 
 ## Acknowledgments
 
-- [Agency Agents](https://github.com/msitarzewski/agency-agents) — the source catalog and upstream converter/install scripts.
+- [Agency Agents](https://github.com/msitarzewski/agency-agents) — the source catalog and upstream converter/install scripts. The app contributes its transforms back upstream: v0.2.0's Osaurus integration and the shared `tools.json` tool manifest (the twin of `divisions.json`) landed there first.
 - [Tauri](https://tauri.app) — native app shell without the Electron footprint.
 - [Svelte](https://svelte.dev) — the frontend runtime.
 
