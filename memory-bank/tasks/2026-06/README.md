@@ -60,8 +60,19 @@ enum dropped; installability derived from `format ∈ IMPLEMENTED_FORMATS`). All
 In-app Playbook + `docs/USING-AGENTS.md`; Teams/Projects master-detail; Global-vs-Projects dashboard sunburst.
 cargo 264/0, svelte-check 0. See [260621_tool-registry-12-tools-osaurus.md](./260621_tool-registry-12-tools-osaurus.md).
 
+### 2026-06-23: v0.2.0 SHIPPED — first feature release + LIVE auto-update (cross-platform) (PRs #21 + #22)
+First release since v0.1.0 (the "0.1.1"/"0.1.2" milestones were never cut separately — they ship here), and
+**auto-update is now live** at `agencyagents.app/updater.json` for both Mac arches. 9 assets (macOS aarch64+x64
+DMGs + updater tarballs, Linux deb/rpm/AppImage, Windows x64/arm64); Homebrew cask bumped to 0.2.0. Dedicated
+agency signing key (`ABF5AFD8`). Shook out two real `release.sh` bugs (`set -u` empty-array + missing `--config`
+allowlist merge / tauri#11142), the rustup-vs-Homebrew Intel cross-compile split, and a corrupted updater
+Keychain key — all fixed + documented (`BUILD.md` reconciled to the Keychain flow). `main` @ `16182e5`.
+See [260623_v0.2.0-ship.md](./260623_v0.2.0-ship.md).
+
 ## Next
-- **Release prep** for v0.1.2: version bump + release notes + README "Loadouts" → Teams.
+- **Opt-in automatic install** — wire the inert "Install updates automatically" toggle to a real off-by-default
+  background download → verify → install (the live updater currently does check → notify → one-click install).
 - Refresh `tools.json` from the catalog clone; Foreign-sweep for nested skill dirs; Antigravity once its skill is
-  deterministic (`date_added` dropped).
-- Deferred: local-runtime system-prompt target (Ollama/LM Studio).
+  deterministic (`date_added` dropped); multi-file renderers (Aider/Windsurf/OpenClaw/Kimi).
+- Windows code signing; local-runtime system-prompt target (Ollama/LM Studio).
+- See the full post-0.2.0 punch list in `docs/PLAN.md`.

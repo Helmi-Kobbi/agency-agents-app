@@ -3,14 +3,19 @@
 Read this first after a compaction. Then `activeContext.md`, `agentLog.md` (append-only history),
 `phases/phase-roadmap.md`, `contracts.md`, `systemPatterns.md`, `decisions.md`.
 
-## ⏩ CURRENT (2026-06-22) — read `activeContext.md` for the live picture
-v0.1.0 SHIPPED (2026-06-16, public/signed/brew). Since then: **v0.1.1** (IA re-org — divisions landing, Teams,
-Projects pillar, the single InstallModal grid + DeployBrowser) and **v0.1.2** (`main` @ `1df932c`, PRs #18+#19):
-the **tool registry single-source** arc — `Tool` enum gone, one upstream-owned `tools.json` (twin of
-`divisions.json`), installability derived from `format ∈ IMPLEMENTED_FORMATS`, all 13 tools, **Osaurus wired**
-(`skill-md`), in-app Playbook, Teams/Projects master-detail, Projects dashboard sunburst. Much below predates
-v0.1.0 (counts/paths may be stale) — `activeContext.md` + `agentLog.md` are authoritative. **NEXT: release prep
-for v0.1.2** (version bump + notes + README Loadouts→Teams).
+## ⏩ CURRENT (2026-06-23) — read `activeContext.md` for the live picture
+**v0.2.0 SHIPPED** (`main` @ `16182e5`, PRs #21 + #22) — first feature release since v0.1.0, rolling up the
+v0.1.1 IA re-org (divisions landing, Teams, Projects pillar, the single InstallModal grid + DeployBrowser) and
+v0.1.2 tool-registry/Osaurus/Playbook arc, **plus LIVE auto-update**. 9 release assets across macOS (aarch64+x64,
+signed/notarized) / Linux (deb/rpm/AppImage) / Windows (x64/arm64); Homebrew cask @ 0.2.0. Auto-update is live at
+`agencyagents.app/updater.json` for **both Mac arches** — dedicated agency signing key `ABF5AFD8` (private key +
+password in the macOS **Keychain**; canonical backup `~/.config/agency-agents-app/updater.key`).
+**Release-build gotchas (hard-won, now in `BUILD.md` + `release.sh`):** updater-on macOS builds must pass a
+`--config` (the macos-private-api allowlist reads only base `tauri.conf.json` — tauri#11142); Intel cross-compile
+needs the **rustup** toolchain (Homebrew rust is host-only); store the updater Keychain key via `$(cat …)` not a
+paste; v0.2.0 asset names use **underscores**. Much further below predates v0.1.0 (counts/paths may be stale) —
+`activeContext.md` + `agentLog.md` (2026-06-23) are authoritative. **NEXT: opt-in automatic install** (wire the
+inert toggle) + the rest of the post-0.2.0 punch list in `docs/PLAN.md`.
 
 ## ✅ THE RE-ORG LANDED (verified 2026-06-14)
 The catalog re-org happened: the active clone now indexes **232 agents** (was ~222). The parity test

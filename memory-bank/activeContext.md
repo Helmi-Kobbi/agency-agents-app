@@ -1,14 +1,41 @@
 # Active Context — Agency Agents
 
-**State**: 🚀 **v0.1.0 SHIPPED (2026-06-16)** — public release at
-[releases/tag/v0.1.0](https://github.com/msitarzewski/agency-agents-app/releases/tag/v0.1.0): 7 artifacts
-(macOS aarch64+x64 signed/notarized DMGs, Linux deb/rpm/AppImage, Windows x64/arm64). **Repo is now PUBLIC.**
-Site: [agencyagents.app](https://agencyagents.app). Homebrew: `brew tap msitarzewski/agency-agents && brew install --cask agency-agents`.
-Cross-platform CI in `.github/workflows/` (linux-build, windows-build) fires on `v*` tags. macOS DMGs build
-locally via `scripts/release.sh` (mind the beta-toolchain `MACOSX_DEPLOYMENT_TARGET` gotcha — `docs/BUILD.md`).
-Now on **v0.1.2 dev** (`main` @ `1df932c`, PRs #18 + #19 merged). Full launch log: `agentLog.md` 2026-06-16.
+**State**: 🚀 **v0.2.0 SHIPPED (2026-06-23)** — `main` @ `16182e5`. First feature release since the v0.1.0
+launch (the internally-tracked "0.1.1"/"0.1.2" milestones were never cut separately — they ship here), and
+**auto-update is now LIVE** at [`agencyagents.app/updater.json`](https://agencyagents.app/updater.json) for
+**both Mac arches** (`darwin-aarch64` + `darwin-x86_64`). Release at
+[releases/tag/v0.2.0](https://github.com/msitarzewski/agency-agents-app/releases/tag/v0.2.0): **9 assets** (macOS
+aarch64+x64 signed/notarized DMGs **+ updater tarballs**, Linux deb/rpm/AppImage, Windows x64/arm64). Homebrew:
+`brew tap msitarzewski/agency-agents && brew install --cask agency-agents` (cask @ 0.2.0). Cross-platform CI in
+`.github/workflows/` (linux-build, windows-build) fires on `v*` tags; macOS DMGs build locally via
+`scripts/release.sh`. Full ship log: `agentLog.md` 2026-06-23; task doc `tasks/2026-06/260623_v0.2.0-ship.md`.
 
 **Workflow (from 2026-06-16):** ALL changes go through a **branch → PR → merge to `main`**. No direct commits to main.
+
+## ✅ v0.2.0 — first feature release + LIVE auto-update — SHIPPED (2026-06-23, PRs #21 + #22; `main` @ 16182e5)
+- **Auto-update is on.** Endpoint `agencyagents.app/updater.json` (Caddy on `umacbookpro` from `~/Sites/agency-agents/`,
+  sibling vhost to the live `brew-browser.zerologic.com` manifest). **Dedicated agency signing key `ABF5AFD8`**
+  (embedded pubkey in `tauri.conf.json`; private key + password in the **macOS Keychain**, services
+  `agency-agents-updater-key` / `…-key-pw`; canonical key file backup at `~/.config/agency-agents-app/updater.key`).
+  Live path = check → notify → one-click install; full hands-off auto-install is still deferred (the
+  "Install updates automatically" toggle ships **present-but-disabled**).
+- **Release build gotchas (now fixed + documented in `BUILD.md` / `release.sh` / PR #22):**
+  - Updater-on macOS builds **must pass a `--config`** flag — the macos-private-api allowlist check reads only
+    base `tauri.conf.json`, so the split `tauri.macos.conf.json` (`macOSPrivateApi:true`) is invisible to it
+    (tauri#11142). `release.sh` now always passes `--config '{"app":{"macOSPrivateApi":true}}'`. (Every old
+    `SKIP_UPDATER` build worked only because it happened to pass a `--config`.)
+  - **Intel cross-compile needs the rustup toolchain** — Homebrew's `rust` is host-only (`can't find crate for
+    core`). Build with `PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"`.
+  - **Store the updater Keychain key via `$(cat …)`**, never a manual paste — a trailing newline corrupts it and
+    signing fails with `incorrect updater private key password: Invalid input`.
+- **Asset naming uses underscores** (`Agency_Agents_0.2.0_*`), NOT v0.1.0's auto-sanitized dots — the live updater
+  manifest and the brew cask url both depend on this.
+- **Post-ship UX (PR #23):** the Agents pane now has a **"Needs attention" filter** (= Outdated ∪ Modified ∪
+  Missing). The install-state lens moved into nav (`ui.agentsLens`) so the Dashboard "N need attention" stat +
+  health-donut segments **deep-link** to a **flat all-divisions** filtered list (`showDivisions` gates on
+  `lens === "all"`); cross-launch lens persistence dropped (would hijack the landing).
+- Decisions: `decisions.md` 2026-06-22 (host + dedicated key) and 2026-06-23 (build mechanics). Gates: cargo 264/0,
+  svelte-check 0, signed+notarized, CI green.
 
 ## ✅ v0.1.2 — Tool registry + Osaurus + Playbook + Projects dashboard — SHIPPED (2026-06-21, PRs #18 + #19; `main` @ 1df932c)
 **Tool knowledge is now a single source of truth.** It consolidated to the single canonical `tools.json` the
@@ -56,9 +83,9 @@ The whole "how people think about agents" reorganization landed:
 
 **Four-pillar model (drives IA copy):** Agents = *who* · Tools = *how* · Teams = *which* · Projects = *where*.
 
-## 🔵 Backlog (next)
-- **Release prep** for v0.1.2: version bump + release notes + README features pass ("Loadouts" → Teams; mention
-  the tool registry / 13 tools / Osaurus).
+## 🔵 Backlog (next — full list in `docs/PLAN.md` post-0.2.0 punch list)
+- **Opt-in automatic install** — the v0.2.0 "Install updates automatically" toggle is inert; wire it to a real
+  off-by-default background download → verify → install (live updater is check → notify → one-click install today).
 - **Refresh `tools.json` from the catalog clone** (vs. the bundled baseline) — like the corpus + `divisions.json`;
   cleaner now that aa #605 prunes stale convert output.
 - **Foreign-sweep for nested skill dirs** (`…/<dir>/SKILL.md`) so CLI-installed Osaurus/Antigravity skills are
@@ -75,7 +102,7 @@ auto-driven), a `?shim=1` Tauri-IPC shim is temporarily injected into `src/app.h
 ships. The shim can't open a real native folder dialog (returns a fixture path), so "Add project…" looks broken
 in the shim though it works natively.
 
-**Last updated**: 2026-06-22
+**Last updated**: 2026-06-23
 
 ## ✅ Pre-release polish (2026-06-15) — committed + pushed on `release-planning`
 - **brew vestige cleanup**: error-type rename (`BrewError*`→`AppError*`), removed dead `catalogAutoRefresh`

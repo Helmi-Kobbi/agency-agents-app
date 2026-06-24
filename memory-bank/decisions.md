@@ -190,3 +190,24 @@ state; the format-membership rule is self-maintaining: ship a renderer → add i
 "agency-"`). **Consequences**: one `skill-md` renderer covers Osaurus and any future Agent-Skills tool; the
 parity test keeps the app honest. Antigravity stays app-recognized-only until upstream makes its skill
 deterministic (its `date_added` is non-deterministic, so it can't share `skill-md`).
+
+### 2026-06-23: Updater-enabled macOS release build mechanics
+**Status**: Approved (v0.2.0 — the first release built WITHOUT `SKIP_UPDATER`). **Context**: turning auto-update
+on exposed three latent traps that the manual-DMG (`SKIP_UPDATER`) path had always sidestepped. **Decisions**
+(codified in `scripts/release.sh` + `docs/BUILD.md`, PR #22):
+1. **Always pass a `--config` to the macOS build.** The tauri build-script's `macos-private-api` allowlist check
+   reads **only base `tauri.conf.json`** — it does NOT honor the platform-split `tauri.macos.conf.json` where
+   `macOSPrivateApi:true` lives (tauri#11142, closed "not planned"). With no `--config`, the feature (from the
+   `[target.macos]` Cargo block) looks unauthorized and the build aborts. A `--config` forces a full config
+   re-resolution that merges the platform file. `release.sh` always passes `--config '{"app":{"macOSPrivateApi":true}}'`.
+   *Alternatives rejected*: putting `macOSPrivateApi` in base config (breaks the Linux/Windows allowlist) or the
+   feature in base deps (the revert-before-cross-platform dance — fragile, must not be committed).
+2. **Intel cross-compile via the rustup toolchain, not Homebrew rust.** The active `rustc` is Homebrew's
+   (`/opt/homebrew/…`), host-only → `can't find crate for core` for `x86_64-apple-darwin`. Build with
+   `PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"` after `rustup target add x86_64-apple-darwin`.
+3. **The updater signing key lives in the Keychain; store it via `$(cat keyfile)`, never a manual paste.** A
+   trailing newline corrupts the stored key and signing fails with `incorrect updater private key password:
+   Invalid input`. The canonical key is the file `~/.config/agency-agents-app/updater.key` (its pubkey is embedded);
+   the Keychain copy must match it byte-for-byte. `release.sh` is fully Keychain-based — no `signing.env`.
+**Consequences**: `release.sh` now signs updater artifacts cleanly with no manual `signer sign -f` step; the next
+release "just works." **References**: `tasks/2026-06/260623_v0.2.0-ship.md`, `~/Downloads/fix-updater-keychain.sh`.
