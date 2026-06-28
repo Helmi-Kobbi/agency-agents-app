@@ -205,8 +205,10 @@ class UiStore {
   }
 
   /** Open the Projects detail pane for a project path (null = back to the list).
-      A nav location, so the title-bar back button returns to the list. */
-  selectProject(path: string | null) { this.projectsSelected = path; this.selectedPackage = null; this.commitNav(); }
+      A nav location, so the title-bar back button returns to the list. Also
+      switches to the Projects section, so deep-links from the Dashboard
+      ("mirror-mesh" row / sunburst slice) actually land on the project. */
+  selectProject(path: string | null) { this.section = "projects"; this.projectsSelected = path; this.selectedPackage = null; this.commitNav(); }
 
   /** Open the Teams detail pane for a team key (null = back to the list).
       A nav location, so the title-bar back button returns to the list. */
