@@ -158,7 +158,7 @@
         {#if managed === 0}
           <p class="muted">Nothing installed yet — deploy an agent and it'll show up here.</p>
         {:else}
-          <InstallSunburst groups={sunburstGroups} centerLabel={String(managed)} centerSub="installs" />
+          <InstallSunburst groups={sunburstGroups} />
         {/if}
       </div>
     </div>
@@ -207,7 +207,7 @@
         {#if totalInstalls === 0}
           <p class="muted">Nothing installed yet — deploy an agent to see its health here.</p>
         {:else}
-          <HealthDonut segments={healthSegments} centerLabel={String(totalInstalls)} centerSub="installs" />
+          <HealthDonut segments={healthSegments} />
         {/if}
       </div>
     </div>
