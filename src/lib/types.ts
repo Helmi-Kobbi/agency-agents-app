@@ -462,6 +462,10 @@ export interface InstalledAgent {
   dest: string;
   state: InstallState;
   updateKind: UpdateKind | null;
+  /** True when THIS app installed it (it's in the ledger); false when the
+      reconcile found it on disk from another source (e.g. a CLI `install.sh`
+      run). Lets the UI separate "tracked by the app" from "total present". */
+  tracked: boolean;
 }
 
 /** Result of `agent_diff` — current on-disk contents vs the canonical render

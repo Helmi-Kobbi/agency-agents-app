@@ -668,6 +668,7 @@ pub async fn installs_reconcile(
             dest: r.dest.clone(),
             state: st,
             update_kind,
+            tracked: true,
         });
     }
 
@@ -691,29 +692,48 @@ pub async fn installs_reconcile(
         .collect();
     let home = home()?;
     for tool in supported() {
+        // Some tools namespace the output slug (e.g. Osaurus dirs are
+        // `agency-<slug>`); strip it before recognizing the agent.
+        let prefix = crate::registry::get(tool)
+            .and_then(|m| m.slug_prefix.as_deref())
+            .unwrap_or("");
         // Dual-scope tools are scanned in BOTH places: the user-global dir (key
         // None) AND every project root the ledger knows about (key Some(path)).
-        let mut scan_roots: Vec<(Option<String>, PathBuf)> = Vec::new();
+        // Each entry: (scope-key, agents-root, suffix-after-`{slug}`).
+        let mut scan_roots: Vec<(Option<String>, PathBuf, String)> = Vec::new();
         if render::supports_user(tool) {
-            scan_roots.extend(agent_dirs(tool, &home, None).into_iter().map(|d| (None, d)));
+            scan_roots
+                .extend(agent_units(tool, &home, None).into_iter().map(|(d, s)| (None, d, s)));
         }
         if render::supports_project(tool) {
             scan_roots.extend(project_dirs.iter().flat_map(|p| {
                 let key = Some(p.to_string_lossy().to_string());
-                agent_dirs(tool, &home, Some(p)).into_iter().map(move |d| (key.clone(), d))
+                agent_units(tool, &home, Some(p)).into_iter().map(move |(d, s)| (key.clone(), d, s))
             }));
         }
-        for (proj, dir) in scan_roots {
-            let mut rd = match tokio::fs::read_dir(&dir).await {
+        for (proj, agents_root, suffix) in scan_roots {
+            let mut rd = match tokio::fs::read_dir(&agents_root).await {
                 Ok(r) => r,
                 Err(_) => continue,
             };
+            // A leading `/` in the suffix means the per-agent unit is a DIRECTORY
+            // (e.g. `{slug}/SKILL.md`); otherwise it's a file (`{slug}.md`).
+            let dir_unit = suffix.starts_with('/');
             while let Ok(Some(ent)) = rd.next_entry().await {
-                let path = ent.path();
-                let Some(file_slug) = path.file_stem().and_then(|s| s.to_str()) else { continue };
-                let Some(agent) = corpus
-                    .get(file_slug)
-                    .or_else(|| corpus.get_by_conversion_slug(file_slug))
+                let name = ent.file_name();
+                let Some(name) = name.to_str() else { continue };
+                // Recover the `{slug}` token + the file that holds the canonical
+                // bytes. Dir unit: the entry IS the slug dir, bytes at <dir>/<leaf>.
+                // File unit: the entry is `<slug><suffix>`.
+                let (token, byte_path) = if dir_unit {
+                    (name.to_string(), agents_root.join(name).join(suffix.trim_start_matches('/')))
+                } else if name.ends_with(suffix.as_str()) && name.len() > suffix.len() {
+                    (name[..name.len() - suffix.len()].to_string(), agents_root.join(name))
+                } else {
+                    continue; // not a unit for this template (stray file/dir)
+                };
+                let cand = token.strip_prefix(prefix).unwrap_or(&token);
+                let Some(agent) = corpus.get(cand).or_else(|| corpus.get_by_conversion_slug(cand))
                 else {
                     continue; // unrecognized → not ours to claim
                 };
@@ -723,7 +743,7 @@ pub async fn installs_reconcile(
                 }
                 // Byte-identical to the catalog ⇒ in sync ⇒ Current. Otherwise a
                 // recognized-but-divergent file ⇒ Foreign (worth a look).
-                let state = if is_canonical_on_disk(&app, &agent, tool, &path).await {
+                let state = if is_canonical_on_disk(&app, &agent, tool, &byte_path).await {
                     InstallState::Current
                 } else {
                     InstallState::Foreign
@@ -734,9 +754,10 @@ pub async fn installs_reconcile(
                     tool: tool.to_string(),
                     scope: render::scope_for(proj.as_deref().map(std::path::Path::new)),
                     project_path: proj.clone(),
-                    dest: path.to_string_lossy().to_string(),
+                    dest: byte_path.to_string_lossy().to_string(),
                     state,
                     update_kind: None,
+                    tracked: false,
                 });
             }
         }
@@ -752,13 +773,31 @@ pub async fn installs_reconcile(
     Ok(out)
 }
 
-/// The directory/directories a tool writes agent files into (parents of the
-/// per-agent dests). Used by the Foreign sweep.
-fn agent_dirs(tool: &str, home: &Path, project_root: Option<&Path>) -> Vec<PathBuf> {
-    render::dests(tool, "_probe", home, project_root)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|p| p.parent().map(|d| d.to_path_buf()))
+/// For the Foreign sweep: each scannable agents-root for a tool, paired with the
+/// path suffix that follows `{slug}` in the dest template. The suffix tells the
+/// sweep whether a per-agent UNIT is a file (e.g. `.md`) or a directory (e.g.
+/// `/SKILL.md`), and where the canonical bytes live inside a dir unit.
+///
+/// Splitting the TEMPLATE (not a `{slug}`-substituted path) is what makes
+/// dir-structured tools work: Osaurus's `.osaurus/skills/{slug}/SKILL.md` scans
+/// `.osaurus/skills` instead of a bogus `.osaurus/skills/_probe`.
+fn agent_units(tool: &str, home: &Path, project_root: Option<&Path>) -> Vec<(PathBuf, String)> {
+    let Some(meta) = crate::registry::get(tool) else {
+        return Vec::new();
+    };
+    let Some(dest) = meta.dest.as_ref() else {
+        return Vec::new();
+    };
+    let (templates, root): (&[String], &Path) = match project_root {
+        Some(p) => (&dest.project, p),
+        None => (&dest.user, home),
+    };
+    templates
+        .iter()
+        .filter_map(|t| {
+            t.split_once("{slug}")
+                .map(|(before, after)| (root.join(before), after.to_string()))
+        })
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect()
@@ -1003,6 +1042,23 @@ mod tests {
         assert_eq!(classify(Some("r"), "r", "s1", Some("s2")), InstallState::Outdated);
         // agent gone from corpus but file intact → current
         assert_eq!(classify(Some("r"), "r", "s1", None), InstallState::Current);
+    }
+
+    #[test]
+    fn agent_units_handles_file_and_dir_tools() {
+        let home = std::path::Path::new("/home/u");
+        // File-per-agent (Claude): root = ~/.claude/agents, suffix = ".md".
+        let claude = agent_units("claudeCode", home, None);
+        assert!(
+            claude.iter().any(|(d, s)| d.ends_with(".claude/agents") && s == ".md"),
+            "claude: {claude:?}"
+        );
+        // Dir-per-agent (Osaurus): the bug was scanning `.osaurus/skills/_probe`.
+        // It must scan `.osaurus/skills` with a `/SKILL.md` leaf.
+        let osa = agent_units("osaurus", home, None);
+        assert_eq!(osa.len(), 1, "osaurus: {osa:?}");
+        assert!(osa[0].0.ends_with(".osaurus/skills"), "osaurus dir: {:?}", osa[0].0);
+        assert_eq!(osa[0].1, "/SKILL.md");
     }
 
     fn sample_agent() -> crate::types::Agent {

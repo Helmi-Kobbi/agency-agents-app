@@ -26,6 +26,10 @@
 
   const available = $derived(corpus.agents.length);
   const managed = $derived(install.installed.filter((i) => i.state !== "foreign").length);
+  // Of that present-on-disk total, how many THIS app installed (ledger-tracked)
+  // vs. picked up from elsewhere (a prior CLI `install.sh` run, byte-matched).
+  const trackedByApp = $derived(install.installed.filter((i) => i.tracked && i.state !== "foreign").length);
+  const fromOtherTools = $derived(managed - trackedByApp);
   const attention = $derived(
     install.installed.filter((i) => ["outdated", "modified", "removed"].includes(i.state)).length,
   );
@@ -128,7 +132,10 @@
     </button>
     <button class="stat" onclick={() => ui.openAgents()}>
       <span class="s-num">{managed}</span>
-      <span class="s-lbl">installed by you</span>
+      <span class="s-lbl">Total Installed</span>
+      {#if fromOtherTools > 0}
+        <span class="s-sub">{trackedByApp} via this app · {fromOtherTools} other tools</span>
+      {/if}
     </button>
     {#if attention > 0}
       <button class="stat warn" onclick={() => ui.openAgents(null, "attention")}>
@@ -146,7 +153,7 @@
 
   <div class="cols">
     <div class="card">
-      <h3 class="c-title">Installed by you</h3>
+      <h3 class="c-title">Total Installed</h3>
       <div class="card-fill center">
         {#if managed === 0}
           <p class="muted">Nothing installed yet — deploy an agent and it'll show up here.</p>
@@ -250,6 +257,7 @@
   .stat:hover { border-color: var(--color-brand); }
   .s-num { font-size: 30px; font-weight: var(--fw-bold); color: var(--color-text-primary); line-height: 1; }
   .s-lbl { font-size: var(--text-body-sm); color: var(--color-text-muted); }
+  .s-sub { font-size: 11px; color: var(--color-text-muted); opacity: 0.85; margin-top: 3px; }
   .stat.warn .s-num { color: var(--color-warning); }
   .stat.info .s-num { color: var(--color-info, var(--color-brand)); }
 

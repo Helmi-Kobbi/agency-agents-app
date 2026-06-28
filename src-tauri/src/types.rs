@@ -254,6 +254,11 @@ pub struct InstalledAgent {
     pub dest: String,
     pub state: InstallState,
     pub update_kind: Option<UpdateKind>,
+    /// True when THIS app installed it (it's in the ledger); false when the
+    /// Foreign sweep found it on disk (e.g. a prior `install.sh` run). Lets the
+    /// UI distinguish "tracked by the app" from "present from other tools"
+    /// instead of claiming every recognized file as "installed by you".
+    pub tracked: bool,
 }
 
 /// Result of `agent_diff` — what's on disk now vs the canonical render the app
@@ -371,6 +376,7 @@ mod tests {
             dest: "/Users/x/.claude/agents/frontend-developer.md".into(),
             state: InstallState::Outdated,
             update_kind: Some(UpdateKind::Cosmetic),
+            tracked: true,
         };
         let v = serde_json::to_value(&a).unwrap();
         for k in [
