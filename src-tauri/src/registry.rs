@@ -184,9 +184,10 @@ mod tests {
     #[test]
     fn registry_loads_and_derives_installable() {
         assert_eq!(all().len(), 14, "expected the full bundled tool set");
-        // The eight tools whose format we render are installable.
+        // The nine tools whose format we render are installable.
         for id in [
             "claudeCode", "codex", "geminiCli", "copilot", "qwen", "cursor", "opencode", "osaurus",
+            "antigravity",
         ] {
             let m = get(id).unwrap_or_else(|| panic!("missing tool {id}"));
             assert!(m.installable(), "{id} should be installable");
@@ -197,7 +198,7 @@ mod tests {
     #[test]
     fn recognized_tools_are_not_installable() {
         // These carry a real (upstream) format the app doesn't render yet.
-        for id in ["windsurf", "aider", "openclaw", "antigravity", "kimi"] {
+        for id in ["windsurf", "aider", "openclaw", "kimi"] {
             let m = get(id).unwrap();
             assert!(!m.installable(), "{id} is recognized-only in the app");
             assert!(m.format.is_some(), "{id} still has an upstream format");
