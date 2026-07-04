@@ -655,6 +655,23 @@ pub async fn uninstall_agent(
     Ok(())
 }
 
+/// Forget a project WITHOUT touching the files on disk: drop every ledger row
+/// whose `project_path` matches, then save. The agent/skill files this app
+/// wrote stay exactly where they are — this only makes the app stop tracking
+/// them, so the project leaves the Projects list (the Foreign sweep re-scans
+/// only project roots the ledger still references, so dropped rows don't come
+/// back). Callers that want the files gone use `uninstall_agent` per row first.
+#[tauri::command]
+pub async fn project_forget(
+    app: AppHandle,
+    project_path: String,
+) -> Result<(), AppError> {
+    let mut ledger = load_ledger(&app).await?;
+    ledger.retain(|r| r.project_path.as_deref() != Some(project_path.as_str()));
+    save_ledger(&app, &ledger).await?;
+    Ok(())
+}
+
 /// The reconciled Library view — every ledger row resolved against disk +
 /// corpus into one of the 5 states.
 #[tauri::command]

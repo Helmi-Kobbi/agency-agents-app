@@ -175,6 +175,7 @@ pub fn run() {
             install::track_agent,
             install::agent_diff,
             install::uninstall_agent,
+            install::project_forget,
             install::installs_reconcile,
             install::installs_for_agent,
             install::tools_list,
