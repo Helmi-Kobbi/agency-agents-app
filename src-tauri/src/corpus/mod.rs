@@ -45,58 +45,31 @@ use crate::util::fs::atomic_write;
 
 // ---------- Constants ----------
 
-/// Canonical fallback category set, used only when the repo tooling can't be
-/// read (e.g. a corpus dir with no `scripts/`). This MIRRORS the `AGENT_DIRS`
-/// array the agency-agents repo declares in `scripts/convert.sh` (kept in sync
-/// upstream with `install.sh` / `lint-agents.sh`) — the repo is the source of
-/// truth, this is just the offline default. See [`discover_categories`].
+/// The division set for the active catalog = the keys of its `divisions.json`
+/// (the canonical division truth the agency-agents repo declares, shared with
+/// the CLI installer and the linters). Read the active root's file when present
+/// (a clone, or the seeded baseline once it carries one); otherwise fall back to
+/// the bundled floor (`agency-categories.json`, itself a mirror of the catalog's
+/// `divisions.json`).
 ///
-/// NB: `integrations/` is NOT a category — it is `convert.sh`'s *output*
-/// directory (per-tool converted copies), so it's intentionally absent.
-/// `strategy/` IS a declared category (NEXUS playbooks/runbooks); it currently
-/// holds no `name:`-frontmatter personas, so it indexes as an empty category.
-const DEFAULT_CATEGORIES: [&str; 16] = [
-    "academic",
-    "design",
-    "engineering",
-    "finance",
-    "game-development",
-    "marketing",
-    "paid-media",
-    "product",
-    "project-management",
-    "sales",
-    "security",
-    "spatial-computing",
-    "specialized",
-    "strategy",
-    "support",
-    "testing",
-];
-
-/// Discover the agent category directories from the repo's own tooling rather
-/// than hardcoding them — so when upstream adds/renames a division, a corpus
-/// refresh (which re-fetches `scripts/`) picks it up with no app change.
-///
-/// We parse the `AGENT_DIRS=( … )` bash array from, in order of preference,
-/// `scripts/convert.sh`, `scripts/install.sh`, or `scripts/lint-agents.sh`
-/// under `root`. Tokens may be spread across lines and/or one-per-line; inline
-/// `#` comments are stripped. Falls back to [`DEFAULT_CATEGORIES`] when no
-/// script is present or the array can't be parsed (e.g. the bundled baseline
-/// before `scripts/` is seeded).
+/// Deriving from `divisions.json` rather than parsing `convert.sh`'s `AGENT_DIRS`
+/// fixes a class of drift: a top-level dir that ISN'T a declared division — e.g.
+/// `strategy/`, which holds NEXUS playbooks/runbooks with no agent frontmatter —
+/// is never surfaced as a division OR scanned as one, and a newly-declared
+/// division (e.g. `healthcare`) appears the moment the catalog carries it, with
+/// no app-side list to keep in sync. This value doubles as the division list AND
+/// the set of directories the indexer scans for agents; both are correct because
+/// every agent-bearing dir is a declared division and no non-division dir holds
+/// agents (enforced upstream by `check-divisions.sh`'s `NON_DIVISION_DIRS`).
 fn discover_categories(root: &Path) -> Vec<String> {
-    for script in ["convert.sh", "install.sh", "lint-agents.sh"] {
-        let path = root.join("scripts").join(script);
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        if let Some(cats) = parse_agent_dirs(&text) {
-            if !cats.is_empty() {
-                return cats;
-            }
-        }
-    }
-    DEFAULT_CATEGORIES.iter().map(|s| s.to_string()).collect()
+    let meta = std::fs::read_to_string(root.join(DIVISIONS_FILENAME))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<DivisionsFile>(&raw).ok())
+        .map(|f| f.divisions)
+        .unwrap_or_else(bundled_division_meta);
+    let mut cats: Vec<String> = meta.into_keys().collect();
+    cats.sort();
+    cats
 }
 
 /// Extract the `AGENT_DIRS=( … )` bash array body from a shell script's text.
@@ -334,6 +307,15 @@ fn bundled_division_meta() -> BTreeMap<String, CategoryMetaRow> {
     serde_json::from_str::<CategoriesFile>(CATEGORIES_JSON)
         .map(|f| f.categories)
         .unwrap_or_default()
+}
+
+/// The bundled division slugs (offline default) — the keys of the bundled floor,
+/// sorted. Used where the active catalog's own `divisions.json` isn't available
+/// to enumerate divisions from (e.g. a tarball with no metadata, or detection).
+fn bundled_division_slugs() -> Vec<String> {
+    let mut v: Vec<String> = bundled_division_meta().into_keys().collect();
+    v.sort();
+    v
 }
 
 /// Resolve division metadata for the active catalog: start from the bundled
@@ -787,7 +769,7 @@ async fn refresh(app_data_dir: &Path) -> Result<CorpusMeta, AppError> {
     // (`scripts/convert.sh`) so a freshly-added upstream division is picked up
     // automatically. Falls back to the canonical default if absent.
     let categories = categories_from_tarball(&bytes)
-        .unwrap_or_else(|| DEFAULT_CATEGORIES.iter().map(|s| s.to_string()).collect());
+        .unwrap_or_else(bundled_division_slugs);
 
     // Extract the category dirs (+ the tooling) into the active catalog root.
     // The tarball has a single top-level `agency-agents-main/` prefix we strip.
@@ -1150,7 +1132,7 @@ async fn provision_managed() -> Result<PathBuf, AppError> {
         })?;
         let bytes = download_corpus_tarball().await?;
         let categories = categories_from_tarball(&bytes)
-            .unwrap_or_else(|| DEFAULT_CATEGORIES.iter().map(|s| s.to_string()).collect());
+            .unwrap_or_else(bundled_division_slugs);
         let written = extract_categories(&bytes, &path, &categories)?;
         if written == 0 {
             return Err(AppError::Internal {
@@ -1531,7 +1513,7 @@ fn looks_like_catalog(root: &Path) -> bool {
     if root.join("scripts").join("convert.sh").exists() {
         return true;
     }
-    DEFAULT_CATEGORIES.iter().any(|c| root.join(c).is_dir())
+    bundled_division_meta().keys().any(|c| root.join(c).is_dir())
 }
 
 /// `corpus_list(category?)` — list view (bodies omitted).
@@ -1665,16 +1647,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn categories_returns_all_16_with_counts() {
+    async fn categories_returns_all_divisions_with_counts() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         write_agent(dir, "engineering", "alpha", "Alpha", "a");
         write_agent(dir, "engineering", "beta", "Beta", "b");
-        // No scripts/ in this tempdir → discover falls back to DEFAULT_CATEGORIES.
+        // No divisions.json in this tempdir → discover falls back to the bundled floor.
         let corpus = build_from_dir(dir, "v", &discover_categories(dir)).await.unwrap();
 
         let cats = corpus.categories();
-        assert_eq!(cats.len(), 16, "all 16 default categories always returned");
+        assert_eq!(cats.len(), 17, "all declared divisions always returned");
         let eng = cats.iter().find(|c| c.slug == "engineering").unwrap();
         assert_eq!(eng.count, 2);
         assert_eq!(eng.label, "Engineering");
@@ -1682,10 +1664,13 @@ mod tests {
         // Empty category still present with count 0.
         let fin = cats.iter().find(|c| c.slug == "finance").unwrap();
         assert_eq!(fin.count, 0);
-        // `strategy` is a canonical division; `integrations` is NOT (it's
-        // convert.sh output), so it must never appear as a category.
-        assert!(cats.iter().any(|c| c.slug == "strategy"), "strategy is canonical");
-        assert!(!cats.iter().any(|c| c.slug == "integrations"), "integrations is not a category");
+        // `healthcare` is a declared division (empty here, count 0). `strategy`
+        // is NOT (it holds playbooks/runbooks, not agents) and `integrations` is
+        // NOT (it's convert.sh output) — neither may appear as a division.
+        let hc = cats.iter().find(|c| c.slug == "healthcare").unwrap();
+        assert_eq!(hc.count, 0);
+        assert!(!cats.iter().any(|c| c.slug == "strategy"), "strategy is not a division");
+        assert!(!cats.iter().any(|c| c.slug == "integrations"), "integrations is not a division");
     }
 
     #[tokio::test]
@@ -1787,10 +1772,11 @@ mod tests {
     /// Parse the REAL bundled baseline corpus (not a synthetic tempdir) so a
     /// malformed real agent (bad frontmatter fence, missing `name`) fails CI
     /// rather than shipping. `cargo test` runs with cwd = crate root, so the
-    /// relative resource path resolves. Categories come from the bundled
-    /// tooling (`scripts/convert.sh`), so `integrations/` (convert.sh output)
-    /// is NOT a category and `strategy/` IS. Counts are pinned to the
-    /// agency-agents snapshot — bump them on a corpus refresh.
+    /// relative resource path resolves. Divisions come from the bundled floor
+    /// (`agency-categories.json`, a mirror of the catalog's `divisions.json`), so
+    /// `strategy/` (playbooks/runbooks) is NOT a division and `integrations/`
+    /// (convert.sh output) is NOT either. Counts are pinned to the agency-agents
+    /// snapshot — bump them on a corpus refresh.
     #[tokio::test]
     async fn real_bundled_baseline_parses_completely() {
         let dir = Path::new("resources/corpus-baseline");
@@ -1798,10 +1784,10 @@ mod tests {
             // Resources not present in this build context — skip rather than fail.
             return;
         }
-        // Categories are discovered from the bundled scripts/convert.sh.
+        // Divisions come from the bundled floor (no divisions.json in the baseline).
         let categories = discover_categories(dir);
-        assert!(categories.iter().any(|c| c == "strategy"), "tooling declares strategy");
-        assert!(!categories.iter().any(|c| c == "integrations"), "integrations is convert.sh output, not a category");
+        assert!(!categories.iter().any(|c| c == "strategy"), "strategy is not a division");
+        assert!(!categories.iter().any(|c| c == "integrations"), "integrations is convert.sh output, not a division");
 
         let corpus = build_from_dir(dir, "baseline-test", &categories).await.unwrap();
 
@@ -1825,15 +1811,19 @@ mod tests {
         // Spot-check categories that nest agents in subdirs upstream — these are
         // the ones a flat seeding would silently undercount.
         let cats = corpus.categories();
-        assert_eq!(cats.len(), 16, "16 agent categories");
+        assert_eq!(cats.len(), 17, "17 declared divisions");
         let count_of = |slug: &str| cats.iter().find(|c| c.slug == slug).map(|c| c.count).unwrap_or(0);
         assert_eq!(count_of("engineering"), 30);
         assert_eq!(count_of("specialized"), 46);
         // game-development nests agents in unity/, godot/, unreal-engine/ etc.
         // upstream; a flat seeding would silently undercount these.
         assert_eq!(count_of("game-development"), 20, "nested game-dev agents included");
-        // strategy is a declared division but ships no frontmatter personas.
-        assert_eq!(count_of("strategy"), 0, "strategy is an empty division in the baseline");
+        // strategy is NOT a division (playbooks/runbooks, no agent frontmatter),
+        // so it never appears as one — regardless of what's on disk.
+        assert!(!cats.iter().any(|c| c.slug == "strategy"), "strategy is not a division");
+        // healthcare IS a declared division; the bundled baseline predates its
+        // agents, so it's present but empty (count 0) until a sync brings them in.
+        assert_eq!(count_of("healthcare"), 0, "healthcare present but empty in the stale baseline");
     }
 
     #[test]
@@ -1944,21 +1934,26 @@ echo done
     }
 
     #[test]
-    fn discover_categories_falls_back_to_default_without_scripts() {
+    fn discover_categories_falls_back_to_bundled_floor_without_divisions_json() {
         let tmp = tempfile::tempdir().unwrap();
         let cats = discover_categories(tmp.path());
-        assert_eq!(cats.len(), 16);
-        assert_eq!(cats, DEFAULT_CATEGORIES.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        // No divisions.json → the bundled floor (agency-categories.json) keys.
+        assert_eq!(cats, bundled_division_slugs());
+        assert!(cats.contains(&"healthcare".to_string()) && cats.contains(&"gis".to_string()));
+        assert!(!cats.contains(&"strategy".to_string()), "no phantom strategy division");
     }
 
     #[test]
-    fn discover_categories_reads_bundled_tooling() {
-        let dir = Path::new("resources/corpus-baseline");
-        if !dir.join("scripts/convert.sh").exists() {
-            return; // resources absent in this build context
-        }
-        let cats = discover_categories(dir);
-        assert!(cats.contains(&"strategy".to_string()));
-        assert!(!cats.contains(&"integrations".to_string()));
+    fn discover_categories_reads_divisions_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(DIVISIONS_FILENAME),
+            r##"{"divisions":{"healthcare":{"label":"Healthcare","icon":"Stethoscope","color":"#0D9488"},"engineering":{"label":"Engineering","icon":"Code","color":"#3B82F6"}}}"##,
+        )
+        .unwrap();
+        // The active catalog's divisions.json is authoritative — its keys, sorted.
+        let cats = discover_categories(tmp.path());
+        assert_eq!(cats, vec!["engineering".to_string(), "healthcare".to_string()]);
+        assert!(!cats.contains(&"strategy".to_string()));
     }
 }
