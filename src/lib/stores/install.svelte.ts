@@ -408,6 +408,33 @@ class InstallStore {
     return { ok, fail };
   }
 
+  /**
+   * Forget a project WITHOUT deleting any files: the backend drops the
+   * project's ledger rows so it leaves the Projects list, but the agent/skill
+   * files this app wrote stay on disk. For the "also uninstall" path the caller
+   * runs `bulk("uninstall", …)` first (which removes files + rows), so this is
+   * only invoked for the keep-the-files choice.
+   */
+  async forgetProject(projectPath: string, label: string): Promise<void> {
+    try {
+      await invoke("project_forget", { projectPath });
+      await this.reconcile();
+      void this.loadTools();
+      activity.log({
+        action: "bulk",
+        outcome: "ok",
+        detail: i18n.t("projects.journalForgotten", { project: label }),
+      });
+    } catch (e) {
+      activity.log({
+        action: "bulk",
+        outcome: "error",
+        detail: i18n.t("common.actionFailed"),
+      });
+      throw e;
+    }
+  }
+
   /** Label for a tool id (for view-models that only have the wire value). */
   toolLabel(tool: Tool): string {
     return SUPPORTED_TOOLS.find((t) => t.id === tool)?.label ?? tool;

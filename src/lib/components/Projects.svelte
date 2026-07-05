@@ -19,6 +19,7 @@
   import EmptyState from "./EmptyState.svelte";
   import Pill from "./Pill.svelte";
   import Button from "./Button.svelte";
+  import Modal from "./Modal.svelte";
   import DeployBrowser from "./DeployBrowser.svelte";
   import FolderIcon from "@lucide/svelte/icons/folder";
   import FolderPlus from "@lucide/svelte/icons/folder-plus";
@@ -118,9 +119,49 @@
     }
   }
 
-  function removeFromList(path: string) {
-    projects.unregister(path);
+  // ── Remove a project: a confirm dialog with two choices (#44). ──
+  // Snapshot label/count at open time so they stay stable across the async op
+  // (reconcile mutates projects.list mid-flight).
+  let confirm = $state<{ path: string; label: string; count: number } | null>(null);
+  let deleteBusy = $state(false);
+
+  function finishRemove(path: string) {
+    confirm = null;
     if (ui.projectsSelected === path) ui.selectProject(null);
+  }
+
+  // "Remove from app only" — forget the project; installed files stay on disk.
+  async function forgetProject() {
+    if (!confirm || deleteBusy) return;
+    const { path, label } = confirm;
+    deleteBusy = true;
+    try {
+      await install.forgetProject(path, label);
+      projects.unregister(path);
+      finishRemove(path);
+    } catch (e) {
+      toast.error(i18n.t("common.actionFailed"), String(e));
+    } finally {
+      deleteBusy = false;
+    }
+  }
+
+  // "Remove & uninstall" — delete the agents THIS APP installed here (never the
+  // user's own files; uninstall backs up modified files first), then forget.
+  async function uninstallAndRemove() {
+    if (!confirm || deleteBusy) return;
+    const { path } = confirm;
+    deleteBusy = true;
+    try {
+      const targets = rosterFor(path).map((r) => ({ slug: r.slug, tool: r.tool, projectPath: path }));
+      if (targets.length > 0) await install.bulk("uninstall", targets);
+      projects.unregister(path);
+      finishRemove(path);
+    } catch (e) {
+      toast.error(i18n.t("common.actionFailed"), String(e));
+    } finally {
+      deleteBusy = false;
+    }
   }
 
   let adding = $state(false);
@@ -150,7 +191,7 @@
       <span class="dh-count">{i18n.count(selected.installedCount, "common.agent.one", "common.agent.many")}</span>
       <button class="btn" onclick={() => reveal(selected.path)}><FolderOpen size={15} /><span>{i18n.t("common.reveal")}</span></button>
       <button class="btn primary" onclick={() => (browseFor = selected.path)}>{i18n.t("teams.deploy")}</button>
-      <button class="btn danger-ic" title={i18n.t("projects.removeTitle")} aria-label={i18n.t("projects.removeAria")} onclick={() => removeFromList(selected.path)}><Trash2 size={15} /></button>
+      <button class="btn danger-ic" title={i18n.t("projects.removeTitle")} aria-label={i18n.t("projects.removeAria")} onclick={() => (confirm = { path: selected.path, label: selected.label, count: selected.installedCount })}><Trash2 size={15} /></button>
     </header>
 
     <div class="scroll">
@@ -238,6 +279,30 @@
   <DeployBrowser projectPath={browseFor} onClose={() => (browseFor = null)} />
 {/if}
 
+{#if confirm}
+  <Modal open title={i18n.t("projects.deleteTitle", { project: confirm.label })} defaultFocus="cancel" onClose={() => (confirm = null)}>
+    <p class="del-body">
+      {#if (confirm?.count ?? 0) > 0}
+        {i18n.t("projects.deleteBody", { project: confirm.label, count: confirm.count })}
+      {:else}
+        {i18n.t("projects.deleteEmptyBody", { project: confirm.label })}
+      {/if}
+    </p>
+    {#if (confirm?.count ?? 0) > 0}
+      <p class="del-note">{i18n.t("projects.deleteExplain")}</p>
+    {/if}
+    {#snippet actions()}
+      <Button variant="secondary" modalAction="cancel" onclick={() => (confirm = null)}>{i18n.t("common.cancel")}</Button>
+      {#if (confirm?.count ?? 0) > 0}
+        <Button variant="danger" disabled={deleteBusy} onclick={uninstallAndRemove}>
+          {i18n.t("projects.deleteUninstall", { count: confirm?.count ?? 0 })}
+        </Button>
+      {/if}
+      <Button variant="primary" modalAction="confirm" disabled={deleteBusy} onclick={forgetProject}>{i18n.t("projects.deleteKeep")}</Button>
+    {/snippet}
+  </Modal>
+{/if}
+
 <style>
   .pr { display: flex; flex-direction: column; height: 100%; min-height: 0; }
   .pr-head {
@@ -321,5 +386,9 @@
 
   .d-empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3); color: var(--color-text-muted); padding: var(--space-6); }
   .d-empty p { font-size: var(--text-body-sm); }
+
+  /* ── Remove-project confirm dialog ── */
+  .del-body { color: var(--color-text-primary); font-size: var(--text-body); }
+  .del-note { margin-top: var(--space-3); color: var(--color-text-muted); font-size: var(--text-body-sm); line-height: 1.5; }
 
 </style>
