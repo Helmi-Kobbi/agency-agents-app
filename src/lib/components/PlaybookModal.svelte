@@ -7,7 +7,6 @@
   import Modal from "./Modal.svelte";
   import Button from "./Button.svelte";
   import StarterPrompt from "./StarterPrompt.svelte";
-  import Runbooks from "./Runbooks.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { i18n } from "$lib/stores/i18n.svelte";
   import { PLAYBOOK_PRACTICES, STARTER_PROMPTS } from "$lib/data/playbook";
@@ -28,10 +27,6 @@
         </li>
       {/each}
     </ol>
-
-    <h2 class="sec">{i18n.t("playbook.runbooks")}</h2>
-    <p class="sec-sub">{i18n.t("playbook.runbooksHint")}</p>
-    <Runbooks />
 
     <h2 class="sec">{i18n.t("playbook.starterPrompts")}</h2>
     <p class="sec-sub">{i18n.t("playbook.starterHint")}</p>
